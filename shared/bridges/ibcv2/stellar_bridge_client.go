@@ -9,9 +9,11 @@ import (
 
 	"github.com/stellar/go-stellar-sdk/clients/rpcclient"
 	protocol "github.com/stellar/go-stellar-sdk/protocols/rpc"
+	"github.com/stellar/go-stellar-sdk/txnbuild"
 
 	"github.com/cosmos/ibc-relayer/db/gen/db"
 	"github.com/cosmos/ibc-relayer/shared/config"
+	"github.com/cosmos/ibc-relayer/shared/signing"
 )
 
 // ErrStellarNotImplemented marks a BridgeClient method that the Stellar client
@@ -23,6 +25,9 @@ type StellarRPC interface {
 	GetLatestLedger(ctx context.Context) (protocol.GetLatestLedgerResponse, error)
 	GetTransaction(ctx context.Context, req protocol.GetTransactionRequest) (protocol.GetTransactionResponse, error)
 	GetLedgers(ctx context.Context, req protocol.GetLedgersRequest) (protocol.GetLedgersResponse, error)
+	LoadAccount(ctx context.Context, address string) (txnbuild.Account, error)
+	SimulateTransaction(ctx context.Context, req protocol.SimulateTransactionRequest) (protocol.SimulateTransactionResponse, error)
+	SendTransaction(ctx context.Context, req protocol.SendTransactionRequest) (protocol.SendTransactionResponse, error)
 }
 
 // StellarBridgeClient relays IBC v2 packets on Stellar. Proofs and headers come
@@ -31,6 +36,7 @@ type StellarBridgeClient struct {
 	chainID string
 	cfg     *config.StellarConfig
 	rpc     StellarRPC
+	signer  *signing.LocalStellarSigner
 }
 
 // NewStellarBridgeClient builds a Stellar bridge client for a configured chain.
@@ -38,6 +44,7 @@ func NewStellarBridgeClient(
 	chainID string,
 	cfg *config.StellarConfig,
 	rpc StellarRPC,
+	signer *signing.LocalStellarSigner,
 ) (*StellarBridgeClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("stellar chain %s: %w", chainID, err)
@@ -45,7 +52,7 @@ func NewStellarBridgeClient(
 	if rpc == nil {
 		rpc = rpcclient.NewClient(cfg.RPC, nil)
 	}
-	return &StellarBridgeClient{chainID: chainID, cfg: cfg, rpc: rpc}, nil
+	return &StellarBridgeClient{chainID: chainID, cfg: cfg, rpc: rpc, signer: signer}, nil
 }
 
 func (*StellarBridgeClient) ChainType() config.ChainType {
@@ -163,10 +170,6 @@ func (c *StellarBridgeClient) ShouldRetryTx(
 		return false, ErrTxNotFound
 	}
 	return true, nil
-}
-
-func (c *StellarBridgeClient) DeliverTx(context.Context, []byte, string) (*BridgeTx, error) {
-	return nil, ErrStellarNotImplemented
 }
 
 func (c *StellarBridgeClient) IsPacketReceived(context.Context, string, uint64) (bool, error) {
