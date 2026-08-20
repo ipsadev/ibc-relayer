@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -19,9 +20,10 @@ import (
 type ChainType string
 
 const (
-	ChainTypeCOSMOS ChainType = "cosmos"
-	ChainTypeEVM    ChainType = "evm"
-	ChainTypeSVM    ChainType = "svm"
+	ChainTypeCOSMOS  ChainType = "cosmos"
+	ChainTypeEVM     ChainType = "evm"
+	ChainTypeSVM     ChainType = "svm"
+	ChainTypeStellar ChainType = "stellar"
 )
 
 type BridgeType string
@@ -165,6 +167,7 @@ type ChainConfig struct {
 	Cosmos                   *CosmosConfig                                 `yaml:"cosmos,omitempty"`
 	EVM                      *EVMConfig                                    `yaml:"evm,omitempty"`
 	SVM                      *SVMConfig                                    `yaml:"svm,omitempty"`
+	Stellar                  *StellarConfig                                `yaml:"stellar,omitempty"`
 	GasTokenSymbol           string                                        `yaml:"gas_token_symbol"`
 	GasTokenCoingeckoID      *string                                       `yaml:"gas_token_coingecko_id"`
 	GasTokenDecimals         uint8                                         `yaml:"gas_token_decimals"`
@@ -228,6 +231,36 @@ type EVMContractConfig struct {
 	ICS20TransferAddress string `yaml:"ics_20_transfer_address"`
 }
 
+// StellarConfig configures a Stellar chain. Stellar is relayed through a proof
+// provider rather than natively: the gateway produces headers and proofs, and
+// this relayer only signs and submits.
+type StellarConfig struct {
+	// RPC is the Soroban RPC endpoint used for submission and queries.
+	RPC string `yaml:"rpc"`
+
+	// GatewayGRPCAddress is the interstellar-gateway address serving
+	// ProofApiService.
+	GatewayGRPCAddress string `yaml:"gateway_grpc_address"`
+	GatewayGRPCTLS     bool   `yaml:"gateway_grpc_tls_enabled"`
+
+	// NetworkPassphrase identifies the Stellar network. Its sha256 is the
+	// network id every SCP signature commits to, so a wrong value rejects every
+	// header rather than failing quietly.
+	NetworkPassphrase string `yaml:"network_passphrase"`
+
+	// RouterContractID is the ibc-router contract, the destination of every
+	// packet invocation.
+	RouterContractID   string `yaml:"router_contract_id"`
+	TransferContractID string `yaml:"transfer_contract_id"`
+
+	// PinnedQuorumSetHashes are the sha256 of each SCPQuorumSet XDR this
+	// relayer will accept as a trust root. Quorum sets reach the relayer over
+	// the gateway, which is untrusted transport, so pinning them here is what
+	// stops a compromised gateway seeding a client with a validator set of its
+	// choosing. Client creation refuses to run while this is empty.
+	PinnedQuorumSetHashes []string `yaml:"pinned_quorum_set_hashes"`
+}
+
 type SVMConfig struct {
 	RPC         string   `yaml:"rpc"`
 	WS          string   `yaml:"ws"`
@@ -265,6 +298,55 @@ func LoadConfig(path string) (Config, error) {
 func (c Config) Validate() error {
 	if c.RelayerAPI.Address == "" {
 		return errors.New("relayer_api.address must be configured")
+	}
+	for key, chain := range c.Chains {
+		if chain.Type != ChainTypeStellar {
+			continue
+		}
+		if err := chain.Stellar.Validate(); err != nil {
+			return fmt.Errorf("chain %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+// Validate rejects a Stellar chain that cannot relay. The pinned quorum set
+// hashes are the one input that cannot be delegated: without them a compromised
+// or misconfigured gateway could seed a light client with a validator set of its
+// choosing, and every subsequent proof would verify happily against it.
+func (s *StellarConfig) Validate() error {
+	if s == nil {
+		return errors.New("stellar config must be set for a stellar chain")
+	}
+	if s.RPC == "" {
+		return errors.New("stellar.rpc must be configured")
+	}
+	if s.GatewayGRPCAddress == "" {
+		return errors.New("stellar.gateway_grpc_address must be configured")
+	}
+	if s.NetworkPassphrase == "" {
+		return errors.New("stellar.network_passphrase must be configured")
+	}
+	if s.RouterContractID == "" {
+		return errors.New("stellar.router_contract_id must be configured")
+	}
+	if len(s.PinnedQuorumSetHashes) == 0 {
+		return errors.New(
+			"stellar.pinned_quorum_set_hashes is empty; refusing to trust a validator set " +
+				"served over untrusted transport",
+		)
+	}
+	for i, pinned := range s.PinnedQuorumSetHashes {
+		decoded, err := hex.DecodeString(strings.TrimPrefix(pinned, "0x"))
+		if err != nil {
+			return fmt.Errorf("stellar.pinned_quorum_set_hashes[%d] is not hex: %w", i, err)
+		}
+		if len(decoded) != 32 {
+			return fmt.Errorf(
+				"stellar.pinned_quorum_set_hashes[%d] is %d bytes, expected a 32 byte sha256",
+				i, len(decoded),
+			)
+		}
 	}
 	return nil
 }
@@ -448,6 +530,11 @@ func (r *configReader) GetRPCEndpoint(chainID string) (string, error) {
 			return "", fmt.Errorf("svm config not set for chain %s", chainID)
 		}
 		return chain.SVM.RPC, nil
+	case ChainTypeStellar:
+		if chain.Stellar == nil {
+			return "", fmt.Errorf("stellar config not set for chain %s", chainID)
+		}
+		return chain.Stellar.RPC, nil
 	default:
 		return "", fmt.Errorf("unknown chain type %s for chain %s", chain.Type, chainID)
 	}
@@ -469,6 +556,11 @@ func (r *configReader) GetGRPCEndpoint(chainID string) (string, bool, error) {
 		return "", false, fmt.Errorf("grpc endpoints not supported for chain type %s", ChainTypeEVM)
 	case ChainTypeSVM:
 		return "", false, fmt.Errorf("grpc endpoints not supported for chain type %s", ChainTypeSVM)
+	case ChainTypeStellar:
+		if chain.Stellar == nil {
+			return "", false, fmt.Errorf("stellar config not set for chain %s", chainID)
+		}
+		return chain.Stellar.GatewayGRPCAddress, chain.Stellar.GatewayGRPCTLS, nil
 	default:
 		return "", false, fmt.Errorf("unknown chain type %s for chain %s", chain.Type, chainID)
 	}
@@ -495,6 +587,9 @@ func (r *configReader) GetBasicAuth(chainID string) (*string, error) {
 		basicAuthVar = chain.EVM.RPCBasicAuthVar
 	case ChainTypeSVM:
 		// SVM chains don't support basic auth
+		return nil, nil
+	case ChainTypeStellar:
+		// Stellar reaches its RPC through the gateway, which carries no basic auth
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown chain type %s for chain %s", chain.Type, chainID)
