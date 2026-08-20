@@ -198,15 +198,7 @@ func (c *StellarBridgeClient) PacketWriteAckStatus(
 	return "", ErrStellarNotImplemented
 }
 
-func (c *StellarBridgeClient) SendPacketsFromTx(context.Context, string, string) ([]*PacketInfo, error) {
-	return nil, ErrStellarNotImplemented
-}
-
 func (c *StellarBridgeClient) SignerGasTokenBalance(context.Context) (*big.Int, error) {
-	return nil, ErrStellarNotImplemented
-}
-
-func (c *StellarBridgeClient) TxFee(context.Context, string) (*big.Int, error) {
 	return nil, ErrStellarNotImplemented
 }
 
@@ -224,10 +216,6 @@ func (c *StellarBridgeClient) IFTTransfer(
 
 func (c *StellarBridgeClient) ClientState(context.Context, string) (ClientState, error) {
 	return ClientState{}, ErrStellarNotImplemented
-}
-
-func (c *StellarBridgeClient) GetTransactionSender(context.Context, string) (string, error) {
-	return "", ErrStellarNotImplemented
 }
 
 func ledgerSequence(height uint64) (uint32, error) {

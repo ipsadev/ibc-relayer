@@ -310,3 +310,90 @@ func TestDeliverTxRequiresASigner(t *testing.T) {
 		t.Fatal("submitting without a signer must fail rather than silently do nothing")
 	}
 }
+
+func scSymbol(s string) xdr.ScVal {
+	symbol := xdr.ScSymbol(s)
+	return xdr.ScVal{Type: xdr.ScValTypeScvSymbol, Sym: &symbol}
+}
+
+func scStringVal(s string) xdr.ScVal {
+	text := xdr.ScString(s)
+	return xdr.ScVal{Type: xdr.ScValTypeScvString, Str: &text}
+}
+
+func scU64(v uint64) xdr.ScVal {
+	number := xdr.Uint64(v)
+	return xdr.ScVal{Type: xdr.ScValTypeScvU64, U64: &number}
+}
+
+func scMap(entries ...xdr.ScMapEntry) xdr.ScVal {
+	m := xdr.ScMap(entries)
+	pointer := &m
+	return xdr.ScVal{Type: xdr.ScValTypeScvMap, Map: &pointer}
+}
+
+func sendPacketEvent(contract xdr.ContractId, sequence uint64) xdr.ContractEvent {
+	packet := scMap(
+		xdr.ScMapEntry{Key: scSymbol("dest_client"), Val: scStringVal("08-wasm-0")},
+		xdr.ScMapEntry{Key: scSymbol("sequence"), Val: scU64(sequence)},
+		xdr.ScMapEntry{Key: scSymbol("source_client"), Val: scStringVal("07-tendermint-0")},
+		xdr.ScMapEntry{Key: scSymbol("timeout_timestamp"), Val: scU64(1_800_000_000)},
+	)
+	data := scMap(xdr.ScMapEntry{Key: scSymbol("packet"), Val: packet})
+
+	return xdr.ContractEvent{
+		ContractId: &contract,
+		Type:       xdr.ContractEventTypeContract,
+		Body: xdr.ContractEventBody{
+			V: 0,
+			V0: &xdr.ContractEventV0{
+				Topics: []xdr.ScVal{scSymbol("send_packet")},
+				Data:   data,
+			},
+		},
+	}
+}
+
+func TestDecodePacketInfoReadsTheRouterEvent(t *testing.T) {
+	var contract xdr.ContractId
+	closeTime := time.Unix(1_700_000_000, 0).UTC()
+
+	packet, err := decodePacketInfo(sendPacketEvent(contract, 7), closeTime)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if packet.Sequence != 7 {
+		t.Fatalf("expected sequence 7, got %d", packet.Sequence)
+	}
+	if packet.SourceClient != "07-tendermint-0" || packet.DestinationClient != "08-wasm-0" {
+		t.Fatalf("expected the client ids to round trip, got %+v", packet)
+	}
+	if !packet.Timestamp.Equal(closeTime) {
+		t.Fatalf("expected the ledger close time, got %s", packet.Timestamp)
+	}
+}
+
+func TestDecodePacketInfoRejectsAnIncompletePacket(t *testing.T) {
+	var contract xdr.ContractId
+	event := sendPacketEvent(contract, 7)
+	event.Body.V0.Data = scMap()
+
+	if _, err := decodePacketInfo(event, time.Now()); err == nil {
+		t.Fatal("an event with no packet must be rejected, not silently skipped")
+	}
+}
+
+func TestEventTopicReadsTheFirstSymbol(t *testing.T) {
+	var contract xdr.ContractId
+	if got := eventTopic(sendPacketEvent(contract, 1)); got != "send_packet" {
+		t.Fatalf("expected send_packet, got %q", got)
+	}
+}
+
+func TestRouterContractRejectsABadStrkey(t *testing.T) {
+	client := stellarClient(t, &fakeStellarRPC{})
+	if _, err := client.routerContract(); err == nil {
+		t.Fatal("a router id that is not a contract strkey must be rejected")
+	}
+}
