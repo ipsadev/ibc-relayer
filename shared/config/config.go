@@ -253,12 +253,25 @@ type StellarConfig struct {
 	RouterContractID   string `yaml:"router_contract_id"`
 	TransferContractID string `yaml:"transfer_contract_id"`
 
+	// QuorumConfigs are the trust roots this relayer creates clients with, each
+	// governing every slot from ValidFrom onward. They live in config rather
+	// than being fetched because a validity range is a policy decision no
+	// archive read can produce, and because the selection must be unambiguous.
+	QuorumConfigs []StellarQuorumConfig `yaml:"quorum_configs"`
+
 	// PinnedQuorumSetHashes are the sha256 of each SCPQuorumSet XDR this
 	// relayer will accept as a trust root. Quorum sets reach the relayer over
 	// the gateway, which is untrusted transport, so pinning them here is what
 	// stops a compromised gateway seeding a client with a validator set of its
 	// choosing. Client creation refuses to run while this is empty.
 	PinnedQuorumSetHashes []string `yaml:"pinned_quorum_set_hashes"`
+}
+
+// StellarQuorumConfig is one trust root and the first slot it governs.
+type StellarQuorumConfig struct {
+	// QuorumSetXDR is a hex-encoded SCPQuorumSet.
+	QuorumSetXDR string `yaml:"quorum_set_xdr"`
+	ValidFrom    uint64 `yaml:"valid_from"`
 }
 
 type SVMConfig struct {
@@ -336,6 +349,25 @@ func (s *StellarConfig) Validate() error {
 				"served over untrusted transport",
 		)
 	}
+	seen := make(map[uint64]struct{}, len(s.QuorumConfigs))
+	for i, quorum := range s.QuorumConfigs {
+		decoded, err := hex.DecodeString(strings.TrimPrefix(quorum.QuorumSetXDR, "0x"))
+		if err != nil {
+			return fmt.Errorf("stellar.quorum_configs[%d].quorum_set_xdr is not hex: %w", i, err)
+		}
+		if len(decoded) == 0 {
+			return fmt.Errorf("stellar.quorum_configs[%d].quorum_set_xdr is empty", i)
+		}
+		if _, duplicate := seen[quorum.ValidFrom]; duplicate {
+			return fmt.Errorf(
+				"stellar.quorum_configs has two entries with valid_from %d; the trust root "+
+					"would be chosen by list order",
+				quorum.ValidFrom,
+			)
+		}
+		seen[quorum.ValidFrom] = struct{}{}
+	}
+
 	for i, pinned := range s.PinnedQuorumSetHashes {
 		decoded, err := hex.DecodeString(strings.TrimPrefix(pinned, "0x"))
 		if err != nil {

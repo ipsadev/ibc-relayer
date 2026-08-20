@@ -128,3 +128,40 @@ func TestGetRPCAndGRPCEndpointsForStellar(t *testing.T) {
 		t.Fatalf("expected the gateway address, got %q tls=%v %v", grpc, tls, err)
 	}
 }
+
+func TestStellarConfigValidateRejectsQuorumConfigsSharingAValidFrom(t *testing.T) {
+	cfg := validStellar()
+	cfg.QuorumConfigs = []StellarQuorumConfig{
+		{QuorumSetXDR: "aabb", ValidFrom: 0},
+		{QuorumSetXDR: "ccdd", ValidFrom: 0},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a tie must be rejected rather than resolved by list order")
+	}
+	if !strings.Contains(err.Error(), "chosen by list order") {
+		t.Fatalf("the error must say why a tie matters, got %v", err)
+	}
+}
+
+func TestStellarConfigValidateAcceptsARotation(t *testing.T) {
+	cfg := validStellar()
+	cfg.QuorumConfigs = []StellarQuorumConfig{
+		{QuorumSetXDR: "aabb", ValidFrom: 0},
+		{QuorumSetXDR: "ccdd", ValidFrom: 63907880},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("distinct validity ranges must be accepted, got %v", err)
+	}
+}
+
+func TestStellarConfigValidateRejectsAMalformedQuorumSet(t *testing.T) {
+	cfg := validStellar()
+	cfg.QuorumConfigs = []StellarQuorumConfig{{QuorumSetXDR: "zz", ValidFrom: 0}}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a quorum set that is not hex must be rejected")
+	}
+}
