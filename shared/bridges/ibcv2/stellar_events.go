@@ -1,6 +1,7 @@
 package ibcv2
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -11,11 +12,13 @@ import (
 	"github.com/stellar/go-stellar-sdk/xdr"
 
 	protocol "github.com/stellar/go-stellar-sdk/protocols/rpc"
+
+	"github.com/cosmos/ibc-relayer/db/gen/db"
 )
 
 const (
 	stellarSendPacketEvent = "send_packet"
-	stellarWriteAckEvent   = "write_acknowledgement"
+	stellarWriteAckEvent   = "write_ack"
 )
 
 func (c *StellarBridgeClient) GetTransactionSender(ctx context.Context, hash string) (string, error) {
@@ -237,4 +240,149 @@ func unmarshalBase64(encoded string, into any) error {
 		return fmt.Errorf("value is not base64: %w", err)
 	}
 	return xdr.SafeUnmarshal(raw, into)
+}
+
+func (c *StellarBridgeClient) PacketWriteAckStatus(
+	ctx context.Context,
+	hash string,
+	sequence uint64,
+	sourceClientID string,
+	destClientID string,
+) (db.Ibcv2WriteAckStatus, error) {
+	tx, err := c.rpc.GetTransaction(ctx, protocol.GetTransactionRequest{Hash: hash})
+	if err != nil {
+		return db.Ibcv2WriteAckStatusUNKNOWN, fmt.Errorf("getting transaction %s: %w", hash, err)
+	}
+	if tx.Status == protocol.TransactionStatusNotFound {
+		return db.Ibcv2WriteAckStatusUNKNOWN, ErrTxNotFound
+	}
+
+	router, err := c.routerContract()
+	if err != nil {
+		return db.Ibcv2WriteAckStatusUNKNOWN, err
+	}
+
+	events, err := decodeContractEvents(tx.ResultMetaXDR)
+	if err != nil {
+		return db.Ibcv2WriteAckStatusUNKNOWN, fmt.Errorf("decoding the meta of %s: %w", hash, err)
+	}
+
+	routed := make([]xdr.ContractEvent, 0, len(events))
+	for _, event := range events {
+		if event.ContractId == nil || *event.ContractId != router {
+			continue
+		}
+		routed = append(routed, event)
+	}
+
+	if err = recvNamesSource(routed, destClientID, sequence, sourceClientID); err != nil {
+		return db.Ibcv2WriteAckStatusUNKNOWN, err
+	}
+
+	for _, event := range routed {
+		if eventTopic(event) != stellarWriteAckEvent {
+			continue
+		}
+		if !packetTopicsMatch(event, destClientID, sequence) {
+			continue
+		}
+		return writeAckStatus(event)
+	}
+
+	return db.Ibcv2WriteAckStatusUNKNOWN, ErrWriteAckNotFoundForPacket
+}
+
+func recvNamesSource(
+	events []xdr.ContractEvent,
+	destClientID string,
+	sequence uint64,
+	sourceClientID string,
+) error {
+	for _, event := range events {
+		if eventTopic(event) != stellarRecvPacketEvent {
+			continue
+		}
+		if !packetTopicsMatch(event, destClientID, sequence) {
+			continue
+		}
+
+		body, ok := event.Body.GetV0()
+		if !ok {
+			return fmt.Errorf("%w: the recv_packet event carries no body", ErrWriteAckDecoding)
+		}
+		packet, ok := scMapField(body.Data, "packet")
+		if !ok {
+			return fmt.Errorf("%w: the recv_packet event carries no packet", ErrWriteAckDecoding)
+		}
+		source, ok := scString(packet, "source_client")
+		if !ok {
+			return fmt.Errorf("%w: the packet carries no source_client", ErrWriteAckDecoding)
+		}
+
+		if source != sourceClientID {
+			return ErrWriteAckNotFoundForPacket
+		}
+		return nil
+	}
+
+	return nil
+}
+
+func packetTopicsMatch(event xdr.ContractEvent, clientID string, sequence uint64) bool {
+	body, ok := event.Body.GetV0()
+	if !ok || len(body.Topics) != 3 {
+		return false
+	}
+
+	topicClient, ok := body.Topics[1].GetStr()
+	if !ok || string(topicClient) != clientID {
+		return false
+	}
+
+	topicSequence, ok := body.Topics[2].GetU64()
+
+	return ok && uint64(topicSequence) == sequence
+}
+
+func writeAckStatus(event xdr.ContractEvent) (db.Ibcv2WriteAckStatus, error) {
+	body, ok := event.Body.GetV0()
+	if !ok {
+		return db.Ibcv2WriteAckStatusUNKNOWN, fmt.Errorf(
+			"%w: the write_ack event carries no body", ErrWriteAckDecoding,
+		)
+	}
+
+	field, ok := scMapField(body.Data, "acknowledgements")
+	if !ok {
+		return db.Ibcv2WriteAckStatusUNKNOWN, fmt.Errorf(
+			"%w: the write_ack event carries no acknowledgements", ErrWriteAckDecoding,
+		)
+	}
+
+	acknowledgements, ok := field.GetVec()
+	if !ok || acknowledgements == nil {
+		return db.Ibcv2WriteAckStatusUNKNOWN, fmt.Errorf(
+			"%w: the acknowledgements are %s, expected a vec", ErrWriteAckDecoding, field.Type,
+		)
+	}
+	if len(*acknowledgements) == 0 {
+		return db.Ibcv2WriteAckStatusUNKNOWN, fmt.Errorf(
+			"%w: the write_ack event carries no acknowledgement", ErrWriteAckDecoding,
+		)
+	}
+
+	if len(*acknowledgements) == 1 {
+		first, ok := (*acknowledgements)[0].GetBytes()
+		if !ok {
+			return db.Ibcv2WriteAckStatusUNKNOWN, fmt.Errorf(
+				"%w: an acknowledgement is %s, expected bytes",
+				ErrWriteAckDecoding, (*acknowledgements)[0].Type,
+			)
+		}
+		if bytes.Equal(first, ErrorAcknowledgement[:]) {
+			return db.Ibcv2WriteAckStatusERROR, nil
+		}
+	}
+
+	return db.Ibcv2WriteAckStatusSUCCESS, nil
 }

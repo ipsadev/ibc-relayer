@@ -11,7 +11,6 @@ import (
 	protocol "github.com/stellar/go-stellar-sdk/protocols/rpc"
 	"github.com/stellar/go-stellar-sdk/txnbuild"
 
-	"github.com/cosmos/ibc-relayer/db/gen/db"
 	"github.com/cosmos/ibc-relayer/shared/config"
 	"github.com/cosmos/ibc-relayer/shared/signing"
 )
@@ -173,12 +172,6 @@ func (c *StellarBridgeClient) ShouldRetryTx(
 	return true, nil
 }
 
-func (c *StellarBridgeClient) PacketWriteAckStatus(
-	context.Context, string, uint64, string, string,
-) (db.Ibcv2WriteAckStatus, error) {
-	return "", ErrStellarNotImplemented
-}
-
 func (c *StellarBridgeClient) SignerGasTokenBalance(context.Context) (*big.Int, error) {
 	return nil, ErrStellarNotImplemented
 }
@@ -193,10 +186,6 @@ func (c *StellarBridgeClient) IFTTransfer(
 	context.Context, string, string, string, *big.Int, time.Duration,
 ) (string, error) {
 	return "", ErrStellarNotImplemented
-}
-
-func (c *StellarBridgeClient) ClientState(context.Context, string) (ClientState, error) {
-	return ClientState{}, ErrStellarNotImplemented
 }
 
 func ledgerSequence(height uint64) (uint32, error) {

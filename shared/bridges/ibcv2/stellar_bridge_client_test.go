@@ -232,9 +232,19 @@ func TestStellarIsTimestampFinalized(t *testing.T) {
 
 func TestStellarUnimplementedMethodsSaySo(t *testing.T) {
 	client := stellarClient(t, &fakeStellarRPC{})
+	ctx := context.Background()
 
-	if _, err := client.ClientState(context.Background(), "07-tendermint-0"); !errors.Is(err, ErrStellarNotImplemented) {
-		t.Fatalf("ClientState must report that it is not implemented, got %v", err)
+	if _, err := client.SignerGasTokenBalance(ctx); !errors.Is(err, ErrStellarNotImplemented) {
+		t.Fatalf("SignerGasTokenBalance must report that it is not implemented, got %v", err)
+	}
+
+	_, err := client.SendTransfer(ctx, "", "", "", "", nil, "", 0)
+	if !errors.Is(err, ErrStellarNotImplemented) {
+		t.Fatalf("SendTransfer must report that it is not implemented, got %v", err)
+	}
+
+	if _, err := client.IFTTransfer(ctx, "", "", "", nil, 0); !errors.Is(err, ErrStellarNotImplemented) {
+		t.Fatalf("IFTTransfer must report that it is not implemented, got %v", err)
 	}
 }
 
