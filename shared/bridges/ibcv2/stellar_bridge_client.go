@@ -25,6 +25,7 @@ type StellarRPC interface {
 	GetLatestLedger(ctx context.Context) (protocol.GetLatestLedgerResponse, error)
 	GetTransaction(ctx context.Context, req protocol.GetTransactionRequest) (protocol.GetTransactionResponse, error)
 	GetLedgers(ctx context.Context, req protocol.GetLedgersRequest) (protocol.GetLedgersResponse, error)
+	GetEvents(ctx context.Context, req protocol.GetEventsRequest) (protocol.GetEventsResponse, error)
 	LoadAccount(ctx context.Context, address string) (txnbuild.Account, error)
 	SimulateTransaction(ctx context.Context, req protocol.SimulateTransactionRequest) (protocol.SimulateTransactionResponse, error)
 	SendTransaction(ctx context.Context, req protocol.SendTransactionRequest) (protocol.SendTransactionResponse, error)
@@ -170,26 +171,6 @@ func (c *StellarBridgeClient) ShouldRetryTx(
 		return false, ErrTxNotFound
 	}
 	return true, nil
-}
-
-func (c *StellarBridgeClient) IsPacketReceived(context.Context, string, uint64) (bool, error) {
-	return false, ErrStellarNotImplemented
-}
-
-func (c *StellarBridgeClient) IsPacketCommitted(context.Context, string, uint64) (bool, error) {
-	return false, ErrStellarNotImplemented
-}
-
-func (c *StellarBridgeClient) FindRecvTx(context.Context, string, string, uint64, time.Time) (*BridgeTx, error) {
-	return nil, ErrStellarNotImplemented
-}
-
-func (c *StellarBridgeClient) FindAckTx(context.Context, string, string, uint64) (*BridgeTx, error) {
-	return nil, ErrStellarNotImplemented
-}
-
-func (c *StellarBridgeClient) FindTimeoutTx(context.Context, string, string, uint64) (*BridgeTx, error) {
-	return nil, ErrStellarNotImplemented
 }
 
 func (c *StellarBridgeClient) PacketWriteAckStatus(

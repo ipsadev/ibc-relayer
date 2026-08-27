@@ -238,7 +238,7 @@ type StellarConfig struct {
 	// RPC is the Soroban RPC endpoint used for submission and queries.
 	RPC string `yaml:"rpc"`
 
-	// GatewayGRPCAddress is the interstellar-gateway address serving
+	// GatewayGRPCAddress is the ipsa-gateway address serving
 	// ProofApiService.
 	GatewayGRPCAddress string `yaml:"gateway_grpc_address"`
 	GatewayGRPCTLS     bool   `yaml:"gateway_grpc_tls_enabled"`

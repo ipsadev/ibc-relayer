@@ -23,6 +23,7 @@ type fakeStellarRPC struct {
 	ledger   protocol.GetLedgersResponse
 	simulate protocol.SimulateTransactionResponse
 	send     protocol.SendTransactionResponse
+	events   protocol.GetEventsResponse
 	err      error
 }
 
@@ -59,6 +60,12 @@ func (f *fakeStellarRPC) SendTransaction(
 	context.Context, protocol.SendTransactionRequest,
 ) (protocol.SendTransactionResponse, error) {
 	return f.send, f.err
+}
+
+func (f *fakeStellarRPC) GetEvents(
+	context.Context, protocol.GetEventsRequest,
+) (protocol.GetEventsResponse, error) {
+	return f.events, f.err
 }
 
 func stellarClient(t *testing.T, rpc StellarRPC) *StellarBridgeClient {
