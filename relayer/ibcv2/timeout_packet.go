@@ -140,7 +140,7 @@ func (p BatchTimeoutPacketProcessor) Process(ctx context.Context, transfers []*I
 
 			update := db.UpdateTransferTimeoutTxParams{
 				TimeoutTxHash:           pgtype.Text{Valid: true, String: timeoutTx.Hash},
-				TimeoutTxTime:           pgtype.Timestamp{Valid: true, Time: timeoutTx.Timestamp},
+				TimeoutTxTime:           pgtype.Timestamp{Valid: true, Time: timeoutTx.Timestamp.UTC()},
 				TimeoutTxRelayerAddress: pgtype.Text{Valid: true, String: timeoutTx.RelayerAddress},
 				SourceChainID:           transfer.GetSourceChainID(),
 				PacketSourceClientID:    transfer.GetPacketSourceClientID(),

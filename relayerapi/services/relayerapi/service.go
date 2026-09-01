@@ -182,11 +182,11 @@ func (s *RelayerAPIService) Relay(
 				SourceChainID:             sourceChainID,
 				DestinationChainID:        destChainID,
 				SourceTxHash:              txHash,
-				SourceTxTime:              pgtype.Timestamp{Valid: true, Time: packet.Timestamp},
+				SourceTxTime:              pgtype.Timestamp{Valid: true, Time: packet.Timestamp.UTC()},
 				PacketSequenceNumber:      int32(packet.Sequence), //nolint:gosec // G115 bounded conversion
 				PacketSourceClientID:      packet.SourceClient,
 				PacketDestinationClientID: packet.DestinationClient,
-				PacketTimeoutTimestamp:    pgtype.Timestamp{Valid: true, Time: packet.TimeoutTimestamp},
+				PacketTimeoutTimestamp:    pgtype.Timestamp{Valid: true, Time: packet.TimeoutTimestamp.UTC()},
 			}
 
 			if err := q.InsertIBCV2Transfer(ctx, insert); err != nil {

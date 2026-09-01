@@ -106,7 +106,7 @@ func (p WaitForWriteAckPacket) Process(ctx context.Context, transfer *IBCV2Trans
 
 	update := db.UpdateTransferWriteAckTxParams{
 		WriteAckTxHash:       pgtype.Text{Valid: true, String: recvHash},
-		WriteAckTxTime:       pgtype.Timestamp{Valid: true, Time: recvTxTime},
+		WriteAckTxTime:       pgtype.Timestamp{Valid: true, Time: recvTxTime.UTC()},
 		WriteAckStatus:       db.NullIbcv2WriteAckStatus{Valid: true, Ibcv2WriteAckStatus: status},
 		SourceChainID:        transfer.GetSourceChainID(),
 		PacketSourceClientID: transfer.GetPacketSourceClientID(),
