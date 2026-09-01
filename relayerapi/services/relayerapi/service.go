@@ -111,7 +111,7 @@ func (s *RelayerAPIService) Relay(
 	sourceChainID := request.GetChainId()
 	txHash := request.GetTxHash()
 
-	lmt.Logger(ctx).Info("received relay request",
+	lmt.Logger(ctx).Debug("received relay request",
 		zap.String("tx_hash", txHash),
 		zap.String("chain_id", sourceChainID),
 	)

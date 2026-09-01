@@ -164,13 +164,13 @@ func NewPipelineOpts(ctx context.Context, transfer *IBCV2Transfer) (*PipelineOpt
 	opts.TimeoutBatchConcurrency = timeoutBatchConcurrency
 
 	if sourceChainConfig.GasTokenCoingeckoID == nil {
-		lmt.Logger(ctx).Warn("source chain has no gas token coingecko id configured, no ack tx or timeout tx gas cost info will be calculated")
+		lmt.Logger(ctx).Debug("source chain has no gas token coingecko id configured, no ack tx or timeout tx gas cost info will be calculated")
 	} else {
 		opts.SourceChainGasTokenCoingeckoID = *sourceChainConfig.GasTokenCoingeckoID
 	}
 
 	if destinationChainConfig.GasTokenCoingeckoID == nil {
-		lmt.Logger(ctx).Warn("destination chain has no gas token coingecko id configured, no recv tx gas cost info will be calculated")
+		lmt.Logger(ctx).Debug("destination chain has no gas token coingecko id configured, no recv tx gas cost info will be calculated")
 	} else {
 		opts.DestinationChainGasTokenCoingeckoID = *destinationChainConfig.GasTokenCoingeckoID
 	}
