@@ -51,6 +51,11 @@ func decodeHostFunctions(raw []byte) ([]xdr.HostFunction, error) {
 // Soroban transaction, in order, stopping at the first failure. Soroban allows
 // one host-function invocation per transaction, so a batch cannot be atomic;
 // the reported BridgeTx is the last one that landed.
+const (
+	inclusionPoll    = 2 * time.Second
+	inclusionTimeout = 60 * time.Second
+)
+
 func (c *StellarBridgeClient) DeliverTx(ctx context.Context, raw []byte, _ string) (*BridgeTx, error) {
 	if c.signer == nil {
 		return nil, fmt.Errorf("stellar chain %s has no signer configured", c.chainID)
@@ -68,11 +73,50 @@ func (c *StellarBridgeClient) DeliverTx(ctx context.Context, raw []byte, _ strin
 	for i, function := range functions {
 		last, err = c.submitHostFunction(ctx, function)
 		if err != nil {
-			return nil, fmt.Errorf("submitting host function %d of %d: %w", i, len(functions), err)
+			return nil, fmt.Errorf("submitting host function %d of %d: %w", i+1, len(functions), err)
+		}
+
+		// A later function reads state an earlier one writes: recv_packet
+		// verifies against the consensus state update_client stores. Soroban
+		// takes one host function per transaction, so the next simulation must
+		// run against a ledger that already contains the previous one.
+		if i+1 < len(functions) {
+			if err := c.awaitInclusion(ctx, last.Hash); err != nil {
+				return nil, fmt.Errorf(
+					"waiting for host function %d of %d (%s): %w",
+					i+1, len(functions), last.Hash, err,
+				)
+			}
 		}
 	}
 
 	return last, nil
+}
+
+func (c *StellarBridgeClient) awaitInclusion(ctx context.Context, hash string) error {
+	deadline := time.Now().Add(inclusionTimeout)
+
+	for {
+		tx, err := c.rpc.GetTransaction(ctx, protocol.GetTransactionRequest{Hash: hash})
+		if err == nil {
+			switch tx.Status {
+			case protocol.TransactionStatusSuccess:
+				return nil
+			case protocol.TransactionStatusFailed:
+				return fmt.Errorf("it failed on chain: %s", tx.ResultXDR)
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("it was not included within %s", inclusionTimeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(inclusionPoll):
+		}
+	}
 }
 
 func (c *StellarBridgeClient) submitHostFunction(
