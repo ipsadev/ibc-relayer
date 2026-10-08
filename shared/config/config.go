@@ -98,6 +98,9 @@ type IBCV2ProofAPIConfig struct {
 	GRPCAddress    string         `yaml:"grpc_address"`
 	GRPCTLSEnabled bool           `yaml:"grpc_tls_enabled"`
 	Timeout        *time.Duration `yaml:"timeout,omitempty"`
+
+	ProofCacheTTL     *time.Duration `yaml:"proof_cache_ttl,omitempty"`
+	ProofCacheMaxUses int            `yaml:"proof_cache_max_uses,omitempty"`
 }
 
 type IBCV2Config struct {

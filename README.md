@@ -205,6 +205,8 @@ Alert setup guidance for customers lives in [`./docs/alerts.md`](./docs/alerts.m
 
 The relayer is configured via a YAML file. The example below is a representative starting point, not an exhaustive schema reference.
 
+`ibcv2_proof_api.proof_cache_ttl` (default `30m`) and `ibcv2_proof_api.proof_cache_max_uses` (default `5`) bound how long, and for how many delivery attempts, a proof already bought for a set of packets is reused when delivering it fails, so a retry does not buy the proof again.
+
 ### Full Example
 
 ```yaml

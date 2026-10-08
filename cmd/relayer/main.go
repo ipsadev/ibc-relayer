@@ -182,7 +182,16 @@ func main() {
 		)
 	}
 
-	relayer := proofapi.NewProofApiServiceClient(conn)
+	var proofCacheTTL time.Duration
+	if proofRelayerConfig.ProofCacheTTL != nil {
+		proofCacheTTL = *proofRelayerConfig.ProofCacheTTL
+	}
+
+	relayer := ibcv2.NewCachingProofAPIClient(
+		proofapi.NewProofApiServiceClient(conn),
+		proofCacheTTL,
+		proofRelayerConfig.ProofCacheMaxUses,
+	)
 	defer conn.Close()
 
 	// create storage for ibcv2 transactions
