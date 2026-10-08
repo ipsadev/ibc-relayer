@@ -109,7 +109,7 @@ func NewClientManagerFromConfig(ctx context.Context, keys map[string]string, sig
 				return nil, fmt.Errorf("creating eth client for chain %s: %w", chainID, err)
 			}
 
-			bridge, err = ibcv2.NewEVMBridgeClient(
+			evmBridge, err := ibcv2.NewEVMBridgeClient(
 				ctx,
 				chainID,
 				chain.EVM.Contracts.ICS26RouterAddress,
@@ -122,6 +122,10 @@ func NewClientManagerFromConfig(ctx context.Context, keys map[string]string, sig
 			if err != nil {
 				return nil, fmt.Errorf("creating evm bridge client for chain %s: %w", chainID, err)
 			}
+
+			evmBridge.SetLogLookbackBlocks(chain.EVM.LogLookbackBlocks)
+
+			bridge = evmBridge
 		case config.ChainTypeCOSMOS:
 			chainID = chain.ChainID
 			prefix := chain.Cosmos.AddressPrefix
@@ -155,7 +159,23 @@ func NewClientManagerFromConfig(ctx context.Context, keys map[string]string, sig
 			}
 
 			bridge = ibcv2.NewCosmosBridgeClient(chainID, signer, prefix, gasPrice, feeDenom, feeAmount, conn, rpc, chain.Cosmos.TxSubmissionDelay)
+		case config.ChainTypeStellar:
+			chainID = chain.ChainID
+
+			signer, err := createStellarSigner(ctx, chainID, keys)
+			if err != nil {
+				return nil, fmt.Errorf("creating stellar signer for chain %s: %w", chainID, err)
+			}
+
+			bridge, err = ibcv2.NewStellarBridgeClient(chainID, chain.Stellar, nil, signer)
+			if err != nil {
+				return nil, fmt.Errorf("creating stellar bridge client for chain %s: %w", chainID, err)
+			}
 		default:
+			lmt.Logger(ctx).Warn("skipping chain with an unsupported type",
+				zap.String("chain_id", chain.ChainID),
+				zap.String("type", string(chain.Type)))
+
 			continue
 		}
 		clients[chainID] = bridge
@@ -174,6 +194,17 @@ func (m *ClientManager) GetClient(ctx context.Context, chainID string) (ibcv2.Br
 		return nil, fmt.Errorf("no configured ibcv2 bridge client for chain ID %s", chainID)
 	}
 	return client, nil
+}
+
+func createStellarSigner(ctx context.Context, chainID string, keys map[string]string) (*signing.LocalStellarSigner, error) {
+	secret, ok := keys[chainID]
+	if !ok {
+		return nil, fmt.Errorf("private key not found for chain %s", chainID)
+	}
+
+	lmt.Logger(ctx).Info("Using local signer for Stellar chain", zap.String("chain_id", chainID))
+
+	return signing.NewLocalStellarSigner(secret)
 }
 
 func createEthClient(ctx context.Context, chainID string) (*ethclient.Client, error) {

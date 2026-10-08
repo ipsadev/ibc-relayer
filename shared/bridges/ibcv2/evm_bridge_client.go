@@ -64,6 +64,30 @@ type EVMBridgeClient struct {
 
 	gasFeeCapMultiplier *float64
 	gasTipCapMultiplier *float64
+
+	logLookbackBlocks *uint64
+}
+
+func (c *EVMBridgeClient) SetLogLookbackBlocks(blocks *uint64) {
+	c.logLookbackBlocks = blocks
+}
+
+func (c *EVMBridgeClient) logQueryStart(ctx context.Context) (*big.Int, error) {
+	if c.logLookbackBlocks == nil {
+		return nil, nil
+	}
+
+	head, err := c.client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("reading the latest header to bound the log query: %w", err)
+	}
+
+	latest := head.Number.Uint64()
+	if latest <= *c.logLookbackBlocks {
+		return big.NewInt(0), nil
+	}
+
+	return new(big.Int).SetUint64(latest - *c.logLookbackBlocks), nil
 }
 
 func NewEVMBridgeClient(
@@ -186,7 +210,13 @@ func (c *EVMBridgeClient) FindRecvTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}
@@ -247,7 +277,13 @@ func (c *EVMBridgeClient) FindAckTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}
@@ -308,7 +344,13 @@ func (c *EVMBridgeClient) FindTimeoutTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}

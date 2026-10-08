@@ -84,7 +84,7 @@ func (t *SubmittedTxCostTracker) Track(ctx context.Context) error {
 
 	for _, submission := range submissions {
 		if err := t.trackSubmission(ctx, submission); err != nil {
-			lmt.Logger(ctx).Error(
+			lmt.Logger(ctx).Debug(
 				"submitted tx gas cost not ready yet",
 				zap.Error(err),
 				zap.Int32("submission_id", submission.ID),

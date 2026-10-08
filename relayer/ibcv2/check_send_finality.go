@@ -60,7 +60,7 @@ func (p CheckSendFinalityProcessor) Process(ctx context.Context, transfer *IBCV2
 			SourceChainID:         transfer.GetSourceChainID(),
 			PacketSourceClientID:  transfer.GetPacketSourceClientID(),
 			PacketSequenceNumber:  int32(transfer.GetPacketSequenceNumber()), //nolint:gosec // G115 bounded conversion
-			SourceTxFinalizedTime: pgtype.Timestamp{Valid: true, Time: finalizedTime},
+			SourceTxFinalizedTime: pgtype.Timestamp{Valid: true, Time: finalizedTime.UTC()},
 		}); err != nil {
 			return nil, fmt.Errorf("updating source tx finalized time: %w", err)
 		}
