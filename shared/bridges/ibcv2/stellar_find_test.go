@@ -255,3 +255,81 @@ func TestFindRecvTxFiltersOnTheDestinationClientTopic(t *testing.T) {
 		t.Fatalf("recv events are keyed by the destination client, got %v", topics[1].ScVal)
 	}
 }
+
+type pagedStellarRPC struct {
+	fakeStellarRPC
+	pages    []protocol.GetEventsResponse
+	requests []protocol.GetEventsRequest
+}
+
+func (r *pagedStellarRPC) GetEvents(
+	_ context.Context, req protocol.GetEventsRequest,
+) (protocol.GetEventsResponse, error) {
+	r.requests = append(r.requests, req)
+
+	if len(r.requests) > len(r.pages) {
+		return protocol.GetEventsResponse{}, nil
+	}
+
+	return r.pages[len(r.requests)-1], nil
+}
+
+func TestFindRecvTxFollowsTheCursorPastAnEmptySearchWindow(t *testing.T) {
+	found := findTestRPC(t, "08-wasm-0")
+	found.tx.EnvelopeXDR = findTestEnvelope(t)
+
+	windowEnd := protocol.Cursor{Ledger: 92_720}
+	rpc := &pagedStellarRPC{
+		fakeStellarRPC: *found,
+		pages: []protocol.GetEventsResponse{
+			{Cursor: windowEnd.String(), LatestLedger: 100_000},
+			{Events: found.events.Events, LatestLedger: 100_000},
+		},
+	}
+	client := findTestClient(t, rpc)
+
+	tx, err := client.FindRecvTx(
+		context.Background(),
+		"07-tendermint-0",
+		"08-wasm-0",
+		7,
+		time.Unix(1_800_000_000, 0),
+	)
+	if err != nil {
+		t.Fatalf("an event past the first search window must be found, got %v", err)
+	}
+	if tx.Hash != findTestTxHash {
+		t.Fatalf("got hash %s, want %s", tx.Hash, findTestTxHash)
+	}
+
+	if len(rpc.requests) != 2 {
+		t.Fatalf("expected two pages, got %d", len(rpc.requests))
+	}
+
+	second := rpc.requests[1]
+	if second.StartLedger != 0 || second.Pagination == nil || second.Pagination.Cursor == nil {
+		t.Fatalf("the second page must continue from the cursor, got %+v", second)
+	}
+	if second.Pagination.Cursor.Ledger != windowEnd.Ledger {
+		t.Fatalf("continued from ledger %d, want %d", second.Pagination.Cursor.Ledger, windowEnd.Ledger)
+	}
+}
+
+func TestFindAckTxStopsWhenTheCursorReachesTheLatestLedger(t *testing.T) {
+	tip := protocol.Cursor{Ledger: 100_000}
+	rpc := &pagedStellarRPC{
+		fakeStellarRPC: fakeStellarRPC{latest: protocol.GetLatestLedgerResponse{Sequence: 100_000}},
+		pages: []protocol.GetEventsResponse{
+			{Cursor: tip.String(), LatestLedger: 100_000},
+		},
+	}
+	client := findTestClient(t, rpc)
+
+	_, err := client.FindAckTx(context.Background(), "07-tendermint-0", "08-wasm-0", 7)
+	if !errors.Is(err, ErrTxNotFound) {
+		t.Fatalf("expected ErrTxNotFound, got %v", err)
+	}
+	if len(rpc.requests) != 1 {
+		t.Fatalf("a cursor at the tip must end the search, got %d pages", len(rpc.requests))
+	}
+}

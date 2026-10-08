@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/stellar/go-stellar-sdk/clients/rpcclient"
@@ -33,10 +34,11 @@ type StellarRPC interface {
 // StellarBridgeClient relays IBC v2 packets on Stellar. Proofs and headers come
 // from the gateway; this client only submits and answers chain queries.
 type StellarBridgeClient struct {
-	chainID string
-	cfg     *config.StellarConfig
-	rpc     StellarRPC
-	signer  *signing.LocalStellarSigner
+	chainID        string
+	cfg            *config.StellarConfig
+	rpc            StellarRPC
+	signer         *signing.LocalStellarSigner
+	submissionLock *sync.Mutex
 }
 
 // NewStellarBridgeClient builds a Stellar bridge client for a configured chain.
@@ -52,7 +54,13 @@ func NewStellarBridgeClient(
 	if rpc == nil {
 		rpc = rpcclient.NewClient(cfg.RPC, nil)
 	}
-	return &StellarBridgeClient{chainID: chainID, cfg: cfg, rpc: rpc, signer: signer}, nil
+	return &StellarBridgeClient{
+		chainID:        chainID,
+		cfg:            cfg,
+		rpc:            rpc,
+		signer:         signer,
+		submissionLock: new(sync.Mutex),
+	}, nil
 }
 
 func (*StellarBridgeClient) ChainType() config.ChainType {

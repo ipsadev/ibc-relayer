@@ -17,6 +17,8 @@ const (
 	stellarEventLookbackLedgers = 17_280
 
 	stellarEventPageLimit = 10
+
+	stellarEventMaxPages = 64
 )
 
 func (c *StellarBridgeClient) FindAckTx(
@@ -98,7 +100,7 @@ func (c *StellarBridgeClient) findPacketTx(
 		{ScVal: ptr(scvU64(sequence))},
 	}
 
-	events, err := c.rpc.GetEvents(ctx, protocol.GetEventsRequest{
+	request := protocol.GetEventsRequest{
 		StartLedger: start,
 		Filters: []protocol.EventFilter{{
 			EventType:   protocol.EventTypeSet{protocol.EventTypeContract: nil},
@@ -106,16 +108,53 @@ func (c *StellarBridgeClient) findPacketTx(
 			Topics:      []protocol.TopicFilter{topics},
 		}},
 		Pagination: &protocol.PaginationOptions{Limit: stellarEventPageLimit},
-	})
-	if err != nil {
-		return nil, fmt.Errorf(
-			"searching for a %s event on client %s sequence %d: %w",
-			eventName, topicClientID, sequence, err,
-		)
 	}
 
-	for i := range events.Events {
-		event := events.Events[i]
+	for page := 0; page < stellarEventMaxPages; page++ {
+		events, err := c.rpc.GetEvents(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"searching for a %s event on client %s sequence %d: %w",
+				eventName, topicClientID, sequence, err,
+			)
+		}
+
+		found, err := c.firstMatchingTx(ctx, eventName, events.Events, matches)
+		if err != nil || found != nil {
+			return found, err
+		}
+
+		if events.Cursor == "" {
+			break
+		}
+
+		cursor, err := protocol.ParseCursor(events.Cursor)
+		if err != nil {
+			return nil, fmt.Errorf("parsing the events cursor %q: %w", events.Cursor, err)
+		}
+
+		if cursor.Ledger >= events.LatestLedger {
+			break
+		}
+
+		request.StartLedger = 0
+		request.Pagination = &protocol.PaginationOptions{
+			Cursor: &cursor,
+			Limit:  stellarEventPageLimit,
+		}
+	}
+
+	return nil, ErrTxNotFound
+}
+
+func (c *StellarBridgeClient) firstMatchingTx(
+	ctx context.Context,
+	eventName string,
+	events []protocol.EventInfo,
+	matches packetMatcher,
+) (*BridgeTx, error) {
+	for i := range events {
+		event := events[i]
 
 		matched, err := eventMatches(event, matches)
 		if err != nil {
@@ -148,7 +187,7 @@ func (c *StellarBridgeClient) findPacketTx(
 		}, nil
 	}
 
-	return nil, ErrTxNotFound
+	return nil, nil
 }
 
 func packetNames(field string, want string) packetMatcher {

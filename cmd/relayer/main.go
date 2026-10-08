@@ -169,7 +169,7 @@ func main() {
 	} else {
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}))) //nolint:gosec // proof relayer is an internal service
 	}
-	opts = append(opts, grpc.WithUnaryInterceptor(metrics.UnaryClientInterceptor))
+	opts = append(opts, grpc.WithChainUnaryInterceptor(metrics.UnaryClientInterceptor, proofAPITimeoutInterceptor(proofRelayerConfig.Timeout)))
 
 	opts = append(opts, grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1024*1024*10)))
 
@@ -239,4 +239,17 @@ func LoadChainIDToPrivateKeyMap(keysPath string) (map[string]string, error) {
 	}
 
 	return keysMap, nil
+}
+
+func proofAPITimeoutInterceptor(timeout *time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, request, reply any, conn *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if timeout == nil {
+			return invoker(ctx, method, request, reply, conn, opts...)
+		}
+
+		deadlineCtx, cancel := context.WithTimeout(ctx, *timeout)
+		defer cancel()
+
+		return invoker(deadlineCtx, method, request, reply, conn, opts...)
+	}
 }

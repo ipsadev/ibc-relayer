@@ -69,6 +69,9 @@ func (c *StellarBridgeClient) DeliverTx(ctx context.Context, raw []byte, _ strin
 		return nil, fmt.Errorf("nothing to submit: the host function array is empty")
 	}
 
+	c.submissionLock.Lock()
+	defer c.submissionLock.Unlock()
+
 	var last *BridgeTx
 	for i, function := range functions {
 		last, err = c.submitHostFunction(ctx, function)

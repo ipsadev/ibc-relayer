@@ -95,8 +95,9 @@ type PostgresConfig struct {
 }
 
 type IBCV2ProofAPIConfig struct {
-	GRPCAddress    string `yaml:"grpc_address"`
-	GRPCTLSEnabled bool   `yaml:"grpc_tls_enabled"`
+	GRPCAddress    string         `yaml:"grpc_address"`
+	GRPCTLSEnabled bool           `yaml:"grpc_tls_enabled"`
+	Timeout        *time.Duration `yaml:"timeout,omitempty"`
 }
 
 type IBCV2Config struct {
@@ -224,6 +225,8 @@ type EVMConfig struct {
 	// the next submission. When unset, defaults to 2s; set explicitly to 0
 	// to disable the delay.
 	TxSubmissionDelay *time.Duration `yaml:"tx_submission_delay,omitempty"`
+
+	LogLookbackBlocks *uint64 `yaml:"log_lookback_blocks,omitempty"`
 }
 
 type EVMContractConfig struct {

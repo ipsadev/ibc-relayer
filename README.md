@@ -347,6 +347,7 @@ Connection to the proof api service that generates relay transactions.
 |-------|------|-------------|
 | `grpc_address` | string | gRPC address of the proof API |
 | `grpc_tls_enabled` | bool | Enable TLS for the proof API connection |
+| `timeout` | duration | Deadline for each proof API call, e.g. `20m`. Optional; calls are unbounded when unset. Set it when a proof API proves on demand (the zk corridor's `stellar-proof-api` takes minutes per proof), so a stuck proof frees its batch slot instead of holding it forever. |
 
 #### `signing`
 
@@ -424,6 +425,7 @@ Required when `type: evm`.
 | `contracts.ics_20_transfer_address` | string | ICS20 Transfer contract address |
 | `gas_fee_cap_multiplier` | float64 | Multiplier applied to the estimated gas fee cap. Optional; defaults to `1.0` when unset. |
 | `gas_tip_cap_multiplier` | float64 | Multiplier applied to the estimated gas tip cap. Optional; defaults to `1.0` when unset. |
+| `log_lookback_blocks` | uint64 | How many blocks back from the head the router log searches that find an already delivered receive, acknowledgement or timeout start. Optional; searches start at block 0 when unset, which public RPCs such as Sepolia's refuse or time out on. |
 
 `rpc` may be overridden per-chain via an environment variable named `<CHAIN_KEY>_EVM_RPC_FULL_URL`, where `<CHAIN_KEY>` is the upper-cased chain map key with hyphens replaced by underscores. If set and non-empty, it takes precedence over the `rpc` field. Examples:
 

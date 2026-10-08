@@ -109,7 +109,7 @@ func NewClientManagerFromConfig(ctx context.Context, keys map[string]string, sig
 				return nil, fmt.Errorf("creating eth client for chain %s: %w", chainID, err)
 			}
 
-			bridge, err = ibcv2.NewEVMBridgeClient(
+			evmBridge, err := ibcv2.NewEVMBridgeClient(
 				ctx,
 				chainID,
 				chain.EVM.Contracts.ICS26RouterAddress,
@@ -122,6 +122,10 @@ func NewClientManagerFromConfig(ctx context.Context, keys map[string]string, sig
 			if err != nil {
 				return nil, fmt.Errorf("creating evm bridge client for chain %s: %w", chainID, err)
 			}
+
+			evmBridge.SetLogLookbackBlocks(chain.EVM.LogLookbackBlocks)
+
+			bridge = evmBridge
 		case config.ChainTypeCOSMOS:
 			chainID = chain.ChainID
 			prefix := chain.Cosmos.AddressPrefix
