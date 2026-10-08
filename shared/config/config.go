@@ -296,12 +296,28 @@ type CoingeckoConfig struct {
 
 // Config Helpers
 
+const InlineConfigVariable = "RELAYER_CONFIG_YAML"
+
+func LoadConfigFromEnvOrFile(path string) (Config, string, error) {
+	if inline := os.Getenv(InlineConfigVariable); strings.TrimSpace(inline) != "" {
+		cfg, err := ParseConfig([]byte(inline))
+		return cfg, InlineConfigVariable, err
+	}
+
+	cfg, err := LoadConfig(path)
+	return cfg, path, err
+}
+
 func LoadConfig(path string) (Config, error) {
 	cfgBytes, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
 	}
 
+	return ParseConfig(cfgBytes)
+}
+
+func ParseConfig(cfgBytes []byte) (Config, error) {
 	var config Config
 	if err := yaml.Unmarshal(cfgBytes, &config); err != nil {
 		return Config{}, err

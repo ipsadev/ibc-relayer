@@ -55,10 +55,11 @@ func main() {
 	promMetrics := metrics.NewPromMetrics()
 	ctx = metrics.ContextWithMetrics(ctx, promMetrics)
 
-	cfg, err := config.LoadConfig(*configPath)
+	cfg, configSource, err := config.LoadConfigFromEnvOrFile(*configPath)
 	if err != nil {
-		lmt.Logger(ctx).Fatal("Unable to load config", zap.Error(err))
+		lmt.Logger(ctx).Fatal("Unable to load config", zap.String("source", configSource), zap.Error(err))
 	}
+	lmt.Logger(ctx).Info("Loaded relayer config", zap.String("source", configSource))
 	ctx = config.ConfigReaderContext(ctx, config.NewConfigReader(cfg))
 
 	dsn := config.GetConfigReader(ctx).GetPostgresConnString()
@@ -105,6 +106,13 @@ func main() {
 		}
 		signerConn = conn
 		defer signerConn.Close()
+	case os.Getenv(inlineKeysVariable) != "":
+		keys, err := ParseChainIDToPrivateKeyMap([]byte(os.Getenv(inlineKeysVariable)))
+		if err != nil {
+			lmt.Logger(ctx).Fatal("Failed to parse the chain id -> private key map in "+inlineKeysVariable, zap.Error(err))
+		}
+		ibcv2ChainIDToPrivateKey = keys
+		lmt.Logger(ctx).Info("Using local keys for signing", zap.String("source", inlineKeysVariable))
 	case signing.KeysPath != "":
 		keys, err := LoadChainIDToPrivateKeyMap(signing.KeysPath)
 		if err != nil {
@@ -113,7 +121,7 @@ func main() {
 		ibcv2ChainIDToPrivateKey = keys
 		lmt.Logger(ctx).Info("Using local keys for signing", zap.String("keys_path", signing.KeysPath))
 	default:
-		lmt.Logger(ctx).Fatal("No signing configuration: set either signing.grpc_address or signing.keys_path")
+		lmt.Logger(ctx).Fatal("No signing configuration: set signing.grpc_address, " + inlineKeysVariable + " or signing.keys_path")
 	}
 
 	ibcv2ClientManager, err = ibcv2.NewClientManagerFromConfig(
@@ -231,12 +239,18 @@ func main() {
 	}
 }
 
+const inlineKeysVariable = "RELAYER_KEYS_JSON"
+
 func LoadChainIDToPrivateKeyMap(keysPath string) (map[string]string, error) {
 	keysBytes, err := os.ReadFile(keysPath)
 	if err != nil {
 		return nil, err
 	}
 
+	return ParseChainIDToPrivateKeyMap(keysBytes)
+}
+
+func ParseChainIDToPrivateKeyMap(keysBytes []byte) (map[string]string, error) {
 	rawKeysMap := make(map[string]map[string]string)
 	if err := json.Unmarshal(keysBytes, &rawKeysMap); err != nil {
 		return nil, err

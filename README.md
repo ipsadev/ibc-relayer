@@ -205,6 +205,8 @@ Alert setup guidance for customers lives in [`./docs/alerts.md`](./docs/alerts.m
 
 The relayer is configured via a YAML file. The example below is a representative starting point, not an exhaustive schema reference.
 
+Where no file can be mounted, as on ECS Fargate, put the whole YAML in the `RELAYER_CONFIG_YAML` environment variable. When it is set and not blank the relayer uses it instead of `--config`, and logs which source it loaded. A malformed inline config is an error; it never falls back to the file.
+
 `ibcv2_proof_api.proof_cache_ttl` (default `30m`) and `ibcv2_proof_api.proof_cache_max_uses` (default `5`) bound how long, and for how many delivery attempts, a proof already bought for a set of packets is reused when delivering it fails, so a retry does not buy the proof again.
 
 ### Full Example
@@ -494,6 +496,8 @@ signing:
 ```
 
 For EVM chains, the private key is a hex-encoded ECDSA private key. For Cosmos chains, it is a hex-encoded secp256k1 private key.
+
+The same JSON can come from the `RELAYER_KEYS_JSON` environment variable instead, for example injected from a secret store, so the keys never sit in a file. It takes precedence over `signing.keys_path`; `signing.grpc_address` (remote signing) still takes precedence over both.
 
 ### Remote Signing
 
