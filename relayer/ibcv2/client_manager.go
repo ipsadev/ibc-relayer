@@ -124,6 +124,7 @@ func NewClientManagerFromConfig(ctx context.Context, keys map[string]string, sig
 			}
 
 			evmBridge.SetLogLookbackBlocks(chain.EVM.LogLookbackBlocks)
+			evmBridge.SetGasLimitMultiplier(chain.EVM.GasLimitMultiplier)
 
 			bridge = evmBridge
 		case config.ChainTypeCOSMOS:

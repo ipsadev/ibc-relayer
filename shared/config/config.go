@@ -230,6 +230,8 @@ type EVMConfig struct {
 	TxSubmissionDelay *time.Duration `yaml:"tx_submission_delay,omitempty"`
 
 	LogLookbackBlocks *uint64 `yaml:"log_lookback_blocks,omitempty"`
+
+	GasLimitMultiplier *float64 `yaml:"gas_limit_multiplier,omitempty"`
 }
 
 type EVMContractConfig struct {

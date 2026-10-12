@@ -430,6 +430,7 @@ Required when `type: evm`.
 | `gas_fee_cap_multiplier` | float64 | Multiplier applied to the estimated gas fee cap. Optional; defaults to `1.0` when unset. |
 | `gas_tip_cap_multiplier` | float64 | Multiplier applied to the estimated gas tip cap. Optional; defaults to `1.0` when unset. |
 | `log_lookback_blocks` | uint64 | How many blocks back from the head the router log searches that find an already delivered receive, acknowledgement or timeout start. Optional; searches start at block 0 when unset, which public RPCs such as Sepolia's refuse or time out on. |
+| `gas_limit_multiplier` | float | Multiplies `eth_estimateGas` before sending, e.g. `2.5`. Optional; the estimate is used as is when unset or at most 1. An app callback that runs out of gas is caught by the router and turned into an error acknowledgement, so the estimate can settle on the failing path; on Sepolia, where contract creation now costs several times what it did, a first receive of a new denom fails that way without headroom. |
 
 `rpc` may be overridden per-chain via an environment variable named `<CHAIN_KEY>_EVM_RPC_FULL_URL`, where `<CHAIN_KEY>` is the upper-cased chain map key with hyphens replaced by underscores. If set and non-empty, it takes precedence over the `rpc` field. Examples:
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"sync"
@@ -65,11 +66,24 @@ type EVMBridgeClient struct {
 	gasFeeCapMultiplier *float64
 	gasTipCapMultiplier *float64
 
-	logLookbackBlocks *uint64
+	logLookbackBlocks  *uint64
+	gasLimitMultiplier *float64
 }
 
 func (c *EVMBridgeClient) SetLogLookbackBlocks(blocks *uint64) {
 	c.logLookbackBlocks = blocks
+}
+
+func (c *EVMBridgeClient) SetGasLimitMultiplier(multiplier *float64) {
+	c.gasLimitMultiplier = multiplier
+}
+
+func AdjustGasLimit(estimate uint64, multiplier *float64) uint64 {
+	if multiplier == nil || *multiplier <= 1 {
+		return estimate
+	}
+
+	return uint64(math.Ceil(float64(estimate) * *multiplier))
 }
 
 func (c *EVMBridgeClient) logQueryStart(ctx context.Context) (*big.Int, error) {
@@ -778,7 +792,7 @@ func (c *EVMBridgeClient) newTx(ctx context.Context, bz []byte, address string) 
 		Nonce:     nonce,
 		GasFeeCap: c.adjustGasFeeCap(gasFeeCap),
 		GasTipCap: c.adjustGasTipCap(gasTipCap),
-		Gas:       gasLimit,
+		Gas:       AdjustGasLimit(gasLimit, c.gasLimitMultiplier),
 		Data:      bz,
 	}
 	return types.NewTx(inner), nil
