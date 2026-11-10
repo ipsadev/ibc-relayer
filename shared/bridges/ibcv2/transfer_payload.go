@@ -52,9 +52,28 @@ func buildICS20ABIArguments() abi.Arguments {
 	}
 }
 
+const abiWordBytes = 32
+
+// unpackMaybeWrapped decodes ABI arguments that may be either flat or wrapped in
+// an outer offset word, as abi.encode of a single struct produces. It tries the
+// value as-is, then with the leading offset word stripped.
+func unpackMaybeWrapped(arguments abi.Arguments, value []byte) ([]any, bool) {
+	if values, err := arguments.Unpack(value); err == nil {
+		return values, true
+	}
+
+	if len(value) > abiWordBytes {
+		if values, err := arguments.Unpack(value[abiWordBytes:]); err == nil {
+			return values, true
+		}
+	}
+
+	return nil, false
+}
+
 func decodeICS20ABI(value []byte) (*TransferPayload, string, bool) {
-	values, err := ics20ABIArguments.Unpack(value)
-	if err != nil || len(values) < 4 {
+	values, ok := unpackMaybeWrapped(ics20ABIArguments, value)
+	if !ok || len(values) < 4 {
 		return nil, "", false
 	}
 
@@ -128,27 +147,65 @@ func applyFastFillTerms(payload *TransferPayload, memo string) {
 	}
 }
 
+var gmpABIArguments = buildGMPABIArguments()
+
+func buildGMPABIArguments() abi.Arguments {
+	stringType, _ := abi.NewType("string", "", nil)
+	bytesType, _ := abi.NewType("bytes", "", nil)
+
+	return abi.Arguments{
+		{Type: stringType},
+		{Type: stringType},
+		{Type: bytesType},
+		{Type: bytesType},
+		{Type: stringType},
+	}
+}
+
+// decodeGMP reads the ics27 packet (sender, receiver, salt, payload, memo). The
+// sender is the calling account and the receiver is the called account.
+func decodeGMP(value []byte) (sender string, receiver string, ok bool) {
+	values, ok := unpackMaybeWrapped(gmpABIArguments, value)
+	if !ok || len(values) < 2 {
+		return "", "", false
+	}
+
+	sender, _ = values[0].(string)
+	receiver, _ = values[1].(string)
+
+	return sender, receiver, true
+}
+
 func DecodeTransferPayload(port, encoding string, value []byte) *TransferPayload {
 	application := applicationForPort(port)
 
-	if application != ApplicationICS20 {
+	switch application {
+	case ApplicationICS20:
+		decoders := []func([]byte) (*TransferPayload, string, bool){decodeICS20ABI, decodeICS20JSON}
+		if strings.Contains(strings.ToLower(encoding), "json") {
+			decoders = []func([]byte) (*TransferPayload, string, bool){decodeICS20JSON, decodeICS20ABI}
+		}
+
+		for _, decode := range decoders {
+			if payload, memo, ok := decode(value); ok {
+				payload.Application = application
+				applyFastFillTerms(payload, memo)
+				return payload
+			}
+		}
+
+		return &TransferPayload{Application: application}
+	case ApplicationICS27:
+		payload := &TransferPayload{Application: application}
+		if sender, receiver, ok := decodeGMP(value); ok {
+			payload.Sender = sender
+			payload.Receiver = receiver
+		}
+
+		return payload
+	default:
 		return &TransferPayload{Application: application}
 	}
-
-	decoders := []func([]byte) (*TransferPayload, string, bool){decodeICS20ABI, decodeICS20JSON}
-	if strings.Contains(strings.ToLower(encoding), "json") {
-		decoders = []func([]byte) (*TransferPayload, string, bool){decodeICS20JSON, decodeICS20ABI}
-	}
-
-	for _, decode := range decoders {
-		if payload, memo, ok := decode(value); ok {
-			payload.Application = application
-			applyFastFillTerms(payload, memo)
-			return payload
-		}
-	}
-
-	return &TransferPayload{Application: application}
 }
 
 func EVMTransferPayload(port string, value []byte) *TransferPayload {
