@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -23,14 +24,18 @@ const (
 	backfillRPCBackoff  = 500 * time.Millisecond
 )
 
+func isPermanentRPCError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
 func retryRPC[T any](ctx context.Context, call func() (T, error)) (T, error) {
 	var result T
 	var err error
 
 	for attempt := 0; attempt < backfillRPCAttempts; attempt++ {
 		result, err = call()
-		if err == nil {
-			return result, nil
+		if err == nil || isPermanentRPCError(err) {
+			return result, err
 		}
 
 		select {
