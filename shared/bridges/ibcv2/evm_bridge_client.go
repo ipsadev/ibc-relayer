@@ -525,14 +525,6 @@ func (c *EVMBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainID s
 			transfer = DecodeTransferPayload(payload.SourcePort, payload.Encoding, payload.Value)
 		}
 
-		if transfer != nil && transfer.Application == ApplicationICS20 && common.IsHexAddress(transfer.Denom) {
-			if token, err := erc20.NewContract(common.HexToAddress(transfer.Denom), c.client); err == nil {
-				if decimals, err := token.Decimals(&bind.CallOpts{Context: ctx}); err == nil {
-					transfer.Decimals = &decimals
-				}
-			}
-		}
-
 		packets = append(packets, &PacketInfo{
 			Sequence:          sendPacket.Packet.Sequence,
 			SourceClient:      sendPacket.Packet.SourceClient,
