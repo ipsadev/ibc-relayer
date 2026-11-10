@@ -99,3 +99,48 @@ SELECT unnest(enum_range(NULL::ibcv2_relay_status))::text AS status;
 SELECT source_chain_id, destination_chain_id, status, COUNT(*)::bigint AS count
 FROM ibcv2_transfers
 GROUP BY source_chain_id, destination_chain_id, status;
+
+-- name: UpdateTransferMetadata :exec
+UPDATE ibcv2_transfers
+SET updated_at=NOW(),
+    application=$1,
+    sender=$2,
+    receiver=$3,
+    transfer_amount=$4,
+    denom=$5,
+    token_origin=$6,
+    token_origin_decimals=$7
+WHERE source_chain_id=$8 AND packet_source_client_id=$9 AND packet_sequence_number=$10;
+
+-- name: UpdateTransferSourceFee :exec
+UPDATE ibcv2_transfers
+SET updated_at=NOW(), fee_origin=$1, fee_origin_denom=$2
+WHERE source_chain_id=$3 AND packet_source_client_id=$4 AND packet_sequence_number=$5;
+
+-- name: UpdateTransferDestinationToken :exec
+UPDATE ibcv2_transfers
+SET updated_at=NOW(), token_destination=$1, token_destination_decimals=$2
+WHERE source_chain_id=$3 AND packet_source_client_id=$4 AND packet_sequence_number=$5;
+
+-- name: UpdateTransferDestinationFee :exec
+UPDATE ibcv2_transfers
+SET updated_at=NOW(), fee_destination=$1, fee_destination_denom=$2
+WHERE source_chain_id=$3 AND packet_source_client_id=$4 AND packet_sequence_number=$5;
+
+-- name: UpdateTransferFastFill :exec
+UPDATE ibcv2_transfers
+SET updated_at=NOW(), fast_fill=$1
+WHERE source_chain_id=$2 AND packet_source_client_id=$3 AND packet_sequence_number=$4;
+
+-- name: SumTransferVolumeByDenom :many
+SELECT denom,
+       token_origin_decimals,
+       SUM(transfer_amount)::numeric AS total_amount,
+       COUNT(*)::bigint AS transfers
+FROM ibcv2_transfers
+WHERE transfer_amount IS NOT NULL
+  AND denom IS NOT NULL
+  AND source_tx_time >= $1
+  AND status IN ('COMPLETE_WITH_ACK', 'COMPLETE_WITH_WRITE_ACK_SUCCESS')
+GROUP BY denom, token_origin_decimals
+ORDER BY transfers DESC;

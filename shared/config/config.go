@@ -175,9 +175,27 @@ type ChainConfig struct {
 	GasTokenSymbol           string                                        `yaml:"gas_token_symbol"`
 	GasTokenCoingeckoID      *string                                       `yaml:"gas_token_coingecko_id"`
 	GasTokenDecimals         uint8                                         `yaml:"gas_token_decimals"`
+	Tokens                   []TokenConfig                                 `yaml:"tokens"`
 	SignerGasAlertThresholds map[BridgeType]SignerGasAlertThresholdsConfig `yaml:"signer_gas_alert_thresholds"`
 	IBCV2                    *IBCV2Config                                  `yaml:"ibcv2"`
 	SupportedBridges         []BridgeType                                  `yaml:"supported_bridges"`
+}
+
+type TokenConfig struct {
+	Denom       string `yaml:"denom"`
+	Symbol      string `yaml:"symbol"`
+	Decimals    uint8  `yaml:"decimals"`
+	CoingeckoID string `yaml:"coingecko_id"`
+}
+
+func (c ChainConfig) TokenDecimals(denom string) (uint8, bool) {
+	for _, token := range c.Tokens {
+		if strings.EqualFold(token.Denom, denom) {
+			return token.Decimals, true
+		}
+	}
+
+	return 0, false
 }
 
 type SignerGasAlertThresholdsConfig struct {

@@ -497,20 +497,31 @@ func (c *EVMBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainID s
 		return nil, fmt.Errorf("getting contract ics26RouterABI for ics_26 router: %w", err)
 	}
 
+	iftABI, err := ift.ContractMetaData.GetAbi()
+	if err != nil {
+		return nil, fmt.Errorf("getting contract abi for ift: %w", err)
+	}
+
 	tx := common.HexToHash(txHash)
 	receipt, err := c.client.TransactionReceipt(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("getting transaction receipt for tx %s on chain %s: %w", txHash, c.chainID, err)
 	}
 
+	fastFill := false
+
 	packets := make([]*PacketInfo, 0, len(receipt.Logs))
 	const sendPacketEvent = "SendPacket"
+	const iftTransferInitiatedEvent = "IFTTransferInitiated"
 	for _, log := range receipt.Logs {
 		if log == nil {
 			continue
 		}
 		if len(log.Topics) == 0 {
 			continue
+		}
+		if iftABI.Events[iftTransferInitiatedEvent].ID == log.Topics[0] {
+			fastFill = true
 		}
 		if ics26RouterABI.Events[sendPacketEvent].ID != log.Topics[0] {
 			continue
@@ -519,11 +530,26 @@ func (c *EVMBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainID s
 		if err != nil {
 			return nil, fmt.Errorf("parsing send packet event from tx %s logs on chain %s: %w", txHash, c.chainID, err)
 		}
+		var transfer *TransferPayload
+		if len(sendPacket.Packet.Payloads) > 0 {
+			payload := sendPacket.Packet.Payloads[0]
+			transfer = DecodeTransferPayload(payload.SourcePort, payload.Encoding, payload.Value)
+		}
+
+		if transfer != nil && transfer.Application == ApplicationICS20 && common.IsHexAddress(transfer.Denom) {
+			if token, err := erc20.NewContract(common.HexToAddress(transfer.Denom), c.client); err == nil {
+				if decimals, err := token.Decimals(&bind.CallOpts{Context: ctx}); err == nil {
+					transfer.Decimals = &decimals
+				}
+			}
+		}
+
 		packets = append(packets, &PacketInfo{
 			Sequence:          sendPacket.Packet.Sequence,
 			SourceClient:      sendPacket.Packet.SourceClient,
 			DestinationClient: sendPacket.Packet.DestClient,
 			TimeoutTimestamp:  time.Unix(int64(sendPacket.Packet.TimeoutTimestamp), 0), //nolint:gosec // G115 bounded conversion
+			Transfer:          transfer,
 		})
 	}
 	if len(packets) == 0 {
@@ -540,6 +566,7 @@ func (c *EVMBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainID s
 
 	for _, packet := range packets {
 		packet.Timestamp = time.Unix(int64(header.Time), 0) //nolint:gosec // G115 bounded conversion
+		packet.FastFill = &fastFill
 	}
 
 	return packets, nil

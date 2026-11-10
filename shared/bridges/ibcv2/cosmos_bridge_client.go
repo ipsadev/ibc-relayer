@@ -538,11 +538,45 @@ func (c *CosmosBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainI
 		return nil, fmt.Errorf("got nil header at height %d", txResult.Height)
 	}
 
+	payloadsByClient := c.sendPacketPayloads(txResult.Tx)
+	seenByClient := make(map[string]int)
+
 	for _, packet := range packets {
 		packet.Timestamp = header.Header.Time
+
+		list := payloadsByClient[packet.SourceClient]
+		index := seenByClient[packet.SourceClient]
+		if index < len(list) {
+			packet.Transfer = list[index]
+			seenByClient[packet.SourceClient]++
+		}
 	}
 
 	return packets, nil
+}
+
+func (c *CosmosBridgeClient) sendPacketPayloads(txBytes []byte) map[string][]*TransferPayload {
+	result := make(map[string][]*TransferPayload)
+
+	decoded, err := c.txConfig.TxDecoder()(txBytes)
+	if err != nil {
+		return result
+	}
+
+	for _, msg := range decoded.GetMsgs() {
+		send, ok := msg.(*ibcchannelv2types.MsgSendPacket)
+		if !ok || len(send.Payloads) == 0 {
+			continue
+		}
+
+		payload := send.Payloads[0]
+		result[send.SourceClient] = append(
+			result[send.SourceClient],
+			DecodeTransferPayload(payload.SourcePort, payload.Encoding, payload.Value),
+		)
+	}
+
+	return result
 }
 
 func (c *CosmosBridgeClient) ShouldRetryTx(ctx context.Context, txHash string, expiry time.Duration, sentTs time.Time) (bool, error) {
