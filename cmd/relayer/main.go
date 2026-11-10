@@ -35,6 +35,7 @@ var (
 	configPath          = flag.String("config", "./config/local/config.yml", "path to relayer config file")
 	enableIBCV2Relaying = flag.Bool("ibcv2-relaying", true, "if ibcv2 relaying should be enabled")
 	dbMigrate           = flag.Bool("db-migrate", false, "run database migrations before starting the relayer")
+	backfill            = flag.Bool("backfill", false, "backfill metadata and fees for existing transfers, then exit")
 )
 
 func main() {
@@ -42,7 +43,8 @@ func main() {
 	// that exits after migrations. Strip the subcommand token so flag.Parse
 	// sees the remaining flags uniformly.
 	migrateMode := isMigrateSubcommand()
-	if migrateMode {
+	backfillMode := isBackfillSubcommand()
+	if migrateMode || backfillMode {
 		os.Args = append(os.Args[:1], os.Args[2:]...)
 	}
 	flag.Parse()
@@ -134,6 +136,14 @@ func main() {
 	)
 	if err != nil {
 		lmt.Logger(ctx).Fatal("error creating ibcv2 client manager from config", zap.Error(err))
+	}
+
+	if backfillMode || *backfill {
+		if err := runBackfill(ctx, config.GetConfigReader(ctx), ibcv2ClientManager, pool); err != nil {
+			lmt.Logger(ctx).Fatal("Failed to backfill transfers", zap.Error(err))
+		}
+		pool.Close()
+		return
 	}
 
 	var coingeckoClient ibcv2.PriceClient

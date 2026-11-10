@@ -497,31 +497,20 @@ func (c *EVMBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainID s
 		return nil, fmt.Errorf("getting contract ics26RouterABI for ics_26 router: %w", err)
 	}
 
-	iftABI, err := ift.ContractMetaData.GetAbi()
-	if err != nil {
-		return nil, fmt.Errorf("getting contract abi for ift: %w", err)
-	}
-
 	tx := common.HexToHash(txHash)
 	receipt, err := c.client.TransactionReceipt(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("getting transaction receipt for tx %s on chain %s: %w", txHash, c.chainID, err)
 	}
 
-	fastFill := false
-
 	packets := make([]*PacketInfo, 0, len(receipt.Logs))
 	const sendPacketEvent = "SendPacket"
-	const iftTransferInitiatedEvent = "IFTTransferInitiated"
 	for _, log := range receipt.Logs {
 		if log == nil {
 			continue
 		}
 		if len(log.Topics) == 0 {
 			continue
-		}
-		if iftABI.Events[iftTransferInitiatedEvent].ID == log.Topics[0] {
-			fastFill = true
 		}
 		if ics26RouterABI.Events[sendPacketEvent].ID != log.Topics[0] {
 			continue
@@ -566,7 +555,6 @@ func (c *EVMBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainID s
 
 	for _, packet := range packets {
 		packet.Timestamp = time.Unix(int64(header.Time), 0) //nolint:gosec // G115 bounded conversion
-		packet.FastFill = &fastFill
 	}
 
 	return packets, nil

@@ -206,8 +206,8 @@ func (s *RelayerAPIService) Relay(
 				}
 			}
 
-			if packet.FastFill != nil {
-				if err := storeFastFill(ctx, q, sourceChainID, packet, *packet.FastFill); err != nil {
+			if packet.Transfer != nil {
+				if err := storeFastFill(ctx, q, sourceChainID, packet, packet.Transfer.FastFill); err != nil {
 					return fmt.Errorf("storing fast fill for packet sequence %d: %w", packet.Sequence, err)
 				}
 			}

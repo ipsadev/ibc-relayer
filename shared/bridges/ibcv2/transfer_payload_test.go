@@ -56,3 +56,38 @@ func TestJSONTransferPayloadDecodesICS20(t *testing.T) {
 	assert.Equal(t, "cosmos1abc", payload.Sender)
 	assert.Equal(t, "GDKP7AGP", payload.Receiver)
 }
+
+func TestEVMTransferPayloadFastFillUsesMemoRecipient(t *testing.T) {
+	amount := new(big.Int)
+	amount.SetString("3420000000000000", 10)
+
+	memo := `{"dest_callback":{"address":"CBM35FY3LHHGBCGJQU6AX3ZA5MS5HLVHXOIVRFN4EK3OFNPASDAFVFTQ"},"fast_fill":"GDKP7AGPKAVJUL6AGGJDXOVLWIOVMZ2YDDKGCY4YSRHHOV6BMJMLWOEC:3420000000000:1794091668"}`
+
+	value, err := ics20ABIArguments.Pack(
+		"0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+		"0x6b1a9014faf309aa31af42d42931f4da3f72a408",
+		"CBM35FY3LHHGBCGJQU6AX3ZA5MS5HLVHXOIVRFN4EK3OFNPASDAFVFTQ",
+		amount,
+		memo,
+	)
+	require.NoError(t, err)
+
+	payload := DecodeTransferPayload("transfer", "", value)
+
+	assert.True(t, payload.FastFill)
+	assert.Equal(t, "GDKP7AGPKAVJUL6AGGJDXOVLWIOVMZ2YDDKGCY4YSRHHOV6BMJMLWOEC", payload.Receiver)
+	assert.Equal(t, "3420000000000000", payload.Amount)
+}
+
+func TestEVMTransferPayloadStandardHasNoFastFill(t *testing.T) {
+	amount := new(big.Int)
+	amount.SetString("1000", 10)
+
+	value, err := ics20ABIArguments.Pack("denom", "sender", "GRECEIVER", amount, "")
+	require.NoError(t, err)
+
+	payload := DecodeTransferPayload("transfer", "", value)
+
+	assert.False(t, payload.FastFill)
+	assert.Equal(t, "GRECEIVER", payload.Receiver)
+}

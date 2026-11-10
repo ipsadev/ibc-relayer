@@ -345,6 +345,52 @@ func (q *Queries) ListRelayStatuses(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const listTransfersToBackfill = `-- name: ListTransfersToBackfill :many
+SELECT id, source_chain_id, destination_chain_id, source_tx_hash, recv_tx_hash,
+       packet_source_client_id, packet_sequence_number
+FROM ibcv2_transfers
+WHERE fee_origin IS NULL OR transfer_amount IS NULL
+ORDER BY id
+`
+
+type ListTransfersToBackfillRow struct {
+	ID                   int32
+	SourceChainID        string
+	DestinationChainID   string
+	SourceTxHash         string
+	RecvTxHash           pgtype.Text
+	PacketSourceClientID string
+	PacketSequenceNumber int32
+}
+
+func (q *Queries) ListTransfersToBackfill(ctx context.Context) ([]ListTransfersToBackfillRow, error) {
+	rows, err := q.db.Query(ctx, listTransfersToBackfill)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTransfersToBackfillRow
+	for rows.Next() {
+		var i ListTransfersToBackfillRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceChainID,
+			&i.DestinationChainID,
+			&i.SourceTxHash,
+			&i.RecvTxHash,
+			&i.PacketSourceClientID,
+			&i.PacketSequenceNumber,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const sumTransferVolumeByDenom = `-- name: SumTransferVolumeByDenom :many
 SELECT denom,
        token_origin_decimals,
