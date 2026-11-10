@@ -23,6 +23,7 @@ type TransferPayload struct {
 	Sender      string
 	Receiver    string
 	Decimals    *uint8
+	FastFill    bool
 }
 
 func applicationForPort(port string) string {
@@ -51,10 +52,10 @@ func buildICS20ABIArguments() abi.Arguments {
 	}
 }
 
-func decodeICS20ABI(value []byte) (*TransferPayload, bool) {
+func decodeICS20ABI(value []byte) (*TransferPayload, string, bool) {
 	values, err := ics20ABIArguments.Unpack(value)
 	if err != nil || len(values) < 4 {
-		return nil, false
+		return nil, "", false
 	}
 
 	denom, _ := values[0].(string)
@@ -63,7 +64,12 @@ func decodeICS20ABI(value []byte) (*TransferPayload, bool) {
 	amount, _ := values[3].(*big.Int)
 
 	if amount == nil {
-		return nil, false
+		return nil, "", false
+	}
+
+	memo := ""
+	if len(values) >= 5 {
+		memo, _ = values[4].(string)
 	}
 
 	return &TransferPayload{
@@ -71,7 +77,7 @@ func decodeICS20ABI(value []byte) (*TransferPayload, bool) {
 		Sender:   sender,
 		Receiver: receiver,
 		Amount:   amount.String(),
-	}, true
+	}, memo, true
 }
 
 type ics20JSON struct {
@@ -79,13 +85,14 @@ type ics20JSON struct {
 	Amount   string `json:"amount"`
 	Sender   string `json:"sender"`
 	Receiver string `json:"receiver"`
+	Memo     string `json:"memo"`
 }
 
-func decodeICS20JSON(value []byte) (*TransferPayload, bool) {
+func decodeICS20JSON(value []byte) (*TransferPayload, string, bool) {
 	var data ics20JSON
 
 	if err := json.Unmarshal(value, &data); err != nil || data.Amount == "" {
-		return nil, false
+		return nil, "", false
 	}
 
 	return &TransferPayload{
@@ -93,7 +100,32 @@ func decodeICS20JSON(value []byte) (*TransferPayload, bool) {
 		Amount:   data.Amount,
 		Sender:   data.Sender,
 		Receiver: data.Receiver,
-	}, true
+	}, data.Memo, true
+}
+
+type fastFillMemo struct {
+	FastFill string `json:"fast_fill"`
+}
+
+func applyFastFillTerms(payload *TransferPayload, memo string) {
+	if memo == "" {
+		return
+	}
+
+	var parsed fastFillMemo
+	if err := json.Unmarshal([]byte(memo), &parsed); err != nil || parsed.FastFill == "" {
+		return
+	}
+
+	payload.FastFill = true
+
+	recipient := parsed.FastFill
+	if index := strings.IndexByte(recipient, ':'); index >= 0 {
+		recipient = recipient[:index]
+	}
+	if recipient != "" {
+		payload.Receiver = recipient
+	}
 }
 
 func DecodeTransferPayload(port, encoding string, value []byte) *TransferPayload {
@@ -103,14 +135,15 @@ func DecodeTransferPayload(port, encoding string, value []byte) *TransferPayload
 		return &TransferPayload{Application: application}
 	}
 
-	decoders := []func([]byte) (*TransferPayload, bool){decodeICS20ABI, decodeICS20JSON}
+	decoders := []func([]byte) (*TransferPayload, string, bool){decodeICS20ABI, decodeICS20JSON}
 	if strings.Contains(strings.ToLower(encoding), "json") {
-		decoders = []func([]byte) (*TransferPayload, bool){decodeICS20JSON, decodeICS20ABI}
+		decoders = []func([]byte) (*TransferPayload, string, bool){decodeICS20JSON, decodeICS20ABI}
 	}
 
 	for _, decode := range decoders {
-		if payload, ok := decode(value); ok {
+		if payload, memo, ok := decode(value); ok {
 			payload.Application = application
+			applyFastFillTerms(payload, memo)
 			return payload
 		}
 	}
