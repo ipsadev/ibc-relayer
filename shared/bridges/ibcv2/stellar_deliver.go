@@ -128,6 +128,10 @@ func (c *StellarBridgeClient) submitHostFunction(
 ) (*BridgeTx, error) {
 	kp := c.signer.Keypair()
 
+	if err := c.restoreArchivedEntries(ctx, function); err != nil {
+		return nil, fmt.Errorf("restoring archived footprint: %w", err)
+	}
+
 	account, err := c.rpc.LoadAccount(ctx, kp.Address())
 	if err != nil {
 		return nil, fmt.Errorf("loading account %s: %w", kp.Address(), err)
@@ -174,6 +178,92 @@ func (c *StellarBridgeClient) submitHostFunction(
 		Timestamp:      time.Now().UTC(),
 		RelayerAddress: kp.Address(),
 	}, nil
+}
+
+// restoreArchivedEntries simulates the host function and, if the simulation
+// reports a restore preamble (archived ledger entries the invocation needs),
+// submits a RestoreFootprint transaction and waits for it to land. When there
+// is nothing to restore it is a no-op and the normal prepare step proceeds.
+func (c *StellarBridgeClient) restoreArchivedEntries(ctx context.Context, function xdr.HostFunction) error {
+	kp := c.signer.Keypair()
+
+	account, err := c.rpc.LoadAccount(ctx, kp.Address())
+	if err != nil {
+		return fmt.Errorf("loading account %s: %w", kp.Address(), err)
+	}
+
+	probe, err := txnbuild.NewTransaction(txnbuild.TransactionParams{
+		SourceAccount:        account,
+		IncrementSequenceNum: true,
+		Operations:           []txnbuild.Operation{&txnbuild.InvokeHostFunction{HostFunction: function}},
+		BaseFee:              stellarBaseFee,
+		Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(300)},
+	})
+	if err != nil {
+		return fmt.Errorf("building the restore probe: %w", err)
+	}
+
+	envelope, err := probe.Base64()
+	if err != nil {
+		return fmt.Errorf("encoding the restore probe: %w", err)
+	}
+
+	simulated, err := c.rpc.SimulateTransaction(ctx, protocol.SimulateTransactionRequest{Transaction: envelope})
+	if err != nil {
+		return fmt.Errorf("simulating the restore probe: %w", err)
+	}
+
+	// Let prepare surface a genuine simulation error; only act on a restore
+	// preamble here.
+	if simulated.Error != "" || simulated.RestorePreamble == nil || simulated.RestorePreamble.TransactionDataXDR == "" {
+		return nil
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(simulated.RestorePreamble.TransactionDataXDR)
+	if err != nil {
+		return fmt.Errorf("decoding the restore preamble data: %w", err)
+	}
+
+	var data xdr.SorobanTransactionData
+	if err = xdr.SafeUnmarshal(raw, &data); err != nil {
+		return fmt.Errorf("decoding the restore preamble soroban data: %w", err)
+	}
+
+	restoreAccount, err := c.rpc.LoadAccount(ctx, kp.Address())
+	if err != nil {
+		return fmt.Errorf("loading account %s for restore: %w", kp.Address(), err)
+	}
+
+	restore, err := txnbuild.NewTransaction(txnbuild.TransactionParams{
+		SourceAccount:        restoreAccount,
+		IncrementSequenceNum: true,
+		Operations:           []txnbuild.Operation{&txnbuild.RestoreFootprint{Ext: xdr.TransactionExt{V: 1, SorobanData: &data}}},
+		BaseFee:              stellarBaseFee + simulated.RestorePreamble.MinResourceFee,
+		Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(300)},
+	})
+	if err != nil {
+		return fmt.Errorf("building the restore transaction: %w", err)
+	}
+
+	signed, err := restore.Sign(c.cfg.NetworkPassphrase, kp)
+	if err != nil {
+		return fmt.Errorf("signing the restore transaction: %w", err)
+	}
+
+	restoreEnvelope, err := signed.Base64()
+	if err != nil {
+		return fmt.Errorf("encoding the restore transaction: %w", err)
+	}
+
+	sent, err := c.rpc.SendTransaction(ctx, protocol.SendTransactionRequest{Transaction: restoreEnvelope})
+	if err != nil {
+		return fmt.Errorf("submitting the restore transaction: %w", err)
+	}
+	if sent.Status == corepb.TXStatusError {
+		return fmt.Errorf("the restore transaction was rejected: %s", sent.ErrorResultXDR)
+	}
+
+	return c.awaitInclusion(ctx, sent.Hash)
 }
 
 // prepare runs the simulation Soroban requires and folds the resulting
