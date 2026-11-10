@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,6 +17,31 @@ import (
 	"github.com/cosmos/ibc-relayer/shared/config"
 	"github.com/cosmos/ibc-relayer/shared/lmt"
 )
+
+const (
+	backfillRPCAttempts = 5
+	backfillRPCBackoff  = 500 * time.Millisecond
+)
+
+func retryRPC[T any](ctx context.Context, call func() (T, error)) (T, error) {
+	var result T
+	var err error
+
+	for attempt := 0; attempt < backfillRPCAttempts; attempt++ {
+		result, err = call()
+		if err == nil {
+			return result, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case <-time.After(backfillRPCBackoff * time.Duration(attempt+1)):
+		}
+	}
+
+	return result, err
+}
 
 func runBackfill(ctx context.Context, cfg config.ConfigReader, manager ibcv2.BridgeClientManager, pool *pgxpool.Pool) error {
 	queries := db.New(pool)
@@ -50,7 +77,7 @@ func backfillTransfer(ctx context.Context, cfg config.ConfigReader, manager ibcv
 		return fmt.Errorf("source client for %s: %w", row.SourceChainID, err)
 	}
 
-	if fee, err := sourceClient.TxFee(ctx, row.SourceTxHash); err == nil && fee != nil {
+	if fee, err := retryRPC(ctx, func() (*big.Int, error) { return sourceClient.TxFee(ctx, row.SourceTxHash) }); err == nil && fee != nil {
 		if chain, err := cfg.GetChainConfig(row.SourceChainID); err == nil && chain.GasTokenSymbol != "" {
 			if err := queries.UpdateTransferSourceFee(ctx, db.UpdateTransferSourceFeeParams{
 				FeeOrigin:            pgtype.Numeric{Int: fee, Valid: true},
@@ -64,17 +91,24 @@ func backfillTransfer(ctx context.Context, cfg config.ConfigReader, manager ibcv
 		}
 	}
 
-	if packets, err := sourceClient.SendPacketsFromTx(ctx, row.SourceChainID, row.SourceTxHash); err == nil {
-		if packet := matchPacket(packets, row.PacketSourceClientID, row.PacketSequenceNumber); packet != nil && packet.Transfer != nil {
-			if err := backfillMetadata(ctx, cfg, queries, row, packet.Transfer); err != nil {
-				return err
-			}
+	packets, err := retryRPC(ctx, func() ([]*bridgeibcv2.PacketInfo, error) {
+		return sourceClient.SendPacketsFromTx(ctx, row.SourceChainID, row.SourceTxHash)
+	})
+	if err != nil {
+		lmt.Logger(ctx).Warn("backfill could not read source packets",
+			zap.Int32("id", row.ID),
+			zap.String("source_tx_hash", row.SourceTxHash),
+			zap.Error(err),
+		)
+	} else if packet := matchPacket(packets, row.PacketSourceClientID, row.PacketSequenceNumber); packet != nil && packet.Transfer != nil {
+		if err := backfillMetadata(ctx, cfg, queries, row, packet.Transfer); err != nil {
+			return err
 		}
 	}
 
 	if row.RecvTxHash.Valid && row.RecvTxHash.String != "" {
 		if destinationClient, err := manager.GetClient(ctx, row.DestinationChainID); err == nil {
-			if fee, err := destinationClient.TxFee(ctx, row.RecvTxHash.String); err == nil && fee != nil {
+			if fee, err := retryRPC(ctx, func() (*big.Int, error) { return destinationClient.TxFee(ctx, row.RecvTxHash.String) }); err == nil && fee != nil {
 				if chain, err := cfg.GetChainConfig(row.DestinationChainID); err == nil && chain.GasTokenSymbol != "" {
 					if err := queries.UpdateTransferDestinationFee(ctx, db.UpdateTransferDestinationFeeParams{
 						FeeDestination:       pgtype.Numeric{Int: fee, Valid: true},
