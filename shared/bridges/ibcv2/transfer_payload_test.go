@@ -91,3 +91,50 @@ func TestEVMTransferPayloadStandardHasNoFastFill(t *testing.T) {
 	assert.False(t, payload.FastFill)
 	assert.Equal(t, "GRECEIVER", payload.Receiver)
 }
+
+func abiOffsetWord() []byte {
+	word := make([]byte, 32)
+	word[31] = 0x20
+	return word
+}
+
+func TestDecodeICS20WrappedTuple(t *testing.T) {
+	amount := new(big.Int)
+	amount.SetString("3420000000000000", 10)
+
+	flat, err := ics20ABIArguments.Pack(
+		"0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+		"0x06ecf411be934d0ecb80a247508ca96c8030808e",
+		"GDKP7AGPKAVJUL6AGGJDXOVLWIOVMZ2YDDKGCY4YSRHHOV6BMJMLWOEC",
+		amount,
+		"",
+	)
+	require.NoError(t, err)
+
+	wrapped := append(abiOffsetWord(), flat...)
+
+	payload := DecodeTransferPayload("transfer", "", wrapped)
+
+	assert.Equal(t, ApplicationICS20, payload.Application)
+	assert.Equal(t, "3420000000000000", payload.Amount)
+	assert.Equal(t, "GDKP7AGPKAVJUL6AGGJDXOVLWIOVMZ2YDDKGCY4YSRHHOV6BMJMLWOEC", payload.Receiver)
+}
+
+func TestDecodeGMPUsesCallerAndCallee(t *testing.T) {
+	flat, err := gmpABIArguments.Pack(
+		"0x6b1a9014faf309aa31af42d42931f4da3f72a408",
+		"CBM35FY3LHHGBCGJQU6AX3ZA5MS5HLVHXOIVRFN4EK3OFNPASDAFVFTQ",
+		[]byte{0x01},
+		[]byte{0x02},
+		"",
+	)
+	require.NoError(t, err)
+
+	wrapped := append(abiOffsetWord(), flat...)
+
+	payload := DecodeTransferPayload("gmpport", "", wrapped)
+
+	assert.Equal(t, ApplicationICS27, payload.Application)
+	assert.Equal(t, "0x6b1a9014faf309aa31af42d42931f4da3f72a408", payload.Sender)
+	assert.Equal(t, "CBM35FY3LHHGBCGJQU6AX3ZA5MS5HLVHXOIVRFN4EK3OFNPASDAFVFTQ", payload.Receiver)
+}
