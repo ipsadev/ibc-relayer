@@ -169,8 +169,8 @@ func NewPipeline(
 
 	// record the recv tx gas cost at current gas prices, if the pipeline has
 	// all of the necessary info to do so
-	if pipelineOpts.DestinationChainGasTokenCoingeckoID != "" && pipelineOpts.DestinationChainGasTokenDecimals != 0 && priceClient != nil {
-		recvTxGasCalculator := NewRecvTxGasCalculatorProcessor(bridgeClientManager, storage, priceClient, pipelineOpts.DestinationChainGasTokenCoingeckoID, pipelineOpts.DestinationChainGasTokenDecimals)
+	if pipelineOpts.DestinationChainGasTokenSymbol != "" || (pipelineOpts.DestinationChainGasTokenCoingeckoID != "" && pipelineOpts.DestinationChainGasTokenDecimals != 0 && priceClient != nil) {
+		recvTxGasCalculator := NewRecvTxGasCalculatorProcessor(bridgeClientManager, storage, priceClient, pipelineOpts.DestinationChainGasTokenCoingeckoID, pipelineOpts.DestinationChainGasTokenDecimals, pipelineOpts.DestinationChainGasTokenSymbol)
 		output = pipeline.ProcessConcurrently(ctx, concurrency, NewIBCV2ProcessorMW(storage, recvTxGasCalculator), output)
 	}
 

@@ -33,6 +33,7 @@ type PacketInfo struct {
 	DestinationClient string
 	TimeoutTimestamp  time.Time
 	Timestamp         time.Time
+	Transfer          *TransferPayload
 }
 
 type ClientState struct {

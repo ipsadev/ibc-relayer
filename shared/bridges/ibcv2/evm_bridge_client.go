@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"sync"
@@ -64,6 +65,43 @@ type EVMBridgeClient struct {
 
 	gasFeeCapMultiplier *float64
 	gasTipCapMultiplier *float64
+
+	logLookbackBlocks  *uint64
+	gasLimitMultiplier *float64
+}
+
+func (c *EVMBridgeClient) SetLogLookbackBlocks(blocks *uint64) {
+	c.logLookbackBlocks = blocks
+}
+
+func (c *EVMBridgeClient) SetGasLimitMultiplier(multiplier *float64) {
+	c.gasLimitMultiplier = multiplier
+}
+
+func AdjustGasLimit(estimate uint64, multiplier *float64) uint64 {
+	if multiplier == nil || *multiplier <= 1 {
+		return estimate
+	}
+
+	return uint64(math.Ceil(float64(estimate) * *multiplier))
+}
+
+func (c *EVMBridgeClient) logQueryStart(ctx context.Context) (*big.Int, error) {
+	if c.logLookbackBlocks == nil {
+		return nil, nil
+	}
+
+	head, err := c.client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("reading the latest header to bound the log query: %w", err)
+	}
+
+	latest := head.Number.Uint64()
+	if latest <= *c.logLookbackBlocks {
+		return big.NewInt(0), nil
+	}
+
+	return new(big.Int).SetUint64(latest - *c.logLookbackBlocks), nil
 }
 
 func NewEVMBridgeClient(
@@ -186,7 +224,13 @@ func (c *EVMBridgeClient) FindRecvTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}
@@ -247,7 +291,13 @@ func (c *EVMBridgeClient) FindAckTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}
@@ -308,7 +358,13 @@ func (c *EVMBridgeClient) FindTimeoutTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}
@@ -463,11 +519,18 @@ func (c *EVMBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainID s
 		if err != nil {
 			return nil, fmt.Errorf("parsing send packet event from tx %s logs on chain %s: %w", txHash, c.chainID, err)
 		}
+		var transfer *TransferPayload
+		if len(sendPacket.Packet.Payloads) > 0 {
+			payload := sendPacket.Packet.Payloads[0]
+			transfer = DecodeTransferPayload(payload.SourcePort, payload.Encoding, payload.Value)
+		}
+
 		packets = append(packets, &PacketInfo{
 			Sequence:          sendPacket.Packet.Sequence,
 			SourceClient:      sendPacket.Packet.SourceClient,
 			DestinationClient: sendPacket.Packet.DestClient,
 			TimeoutTimestamp:  time.Unix(int64(sendPacket.Packet.TimeoutTimestamp), 0), //nolint:gosec // G115 bounded conversion
+			Transfer:          transfer,
 		})
 	}
 	if len(packets) == 0 {
@@ -736,7 +799,7 @@ func (c *EVMBridgeClient) newTx(ctx context.Context, bz []byte, address string) 
 		Nonce:     nonce,
 		GasFeeCap: c.adjustGasFeeCap(gasFeeCap),
 		GasTipCap: c.adjustGasTipCap(gasTipCap),
-		Gas:       gasLimit,
+		Gas:       AdjustGasLimit(gasLimit, c.gasLimitMultiplier),
 		Data:      bz,
 	}
 	return types.NewTx(inner), nil

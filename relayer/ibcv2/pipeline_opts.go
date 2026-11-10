@@ -41,8 +41,10 @@ type PipelineOptions struct {
 
 	SourceChainGasTokenCoingeckoID      string
 	SourceChainGasTokenDecimals         uint8
+	SourceChainGasTokenSymbol           string
 	DestinationChainGasTokenCoingeckoID string
 	DestinationChainGasTokenDecimals    uint8
+	DestinationChainGasTokenSymbol      string
 
 	// SourceFinalityOffset is the number of blocks to wait after a transaction
 	// on the source chain before considering it finalized. If nil, the relayer
@@ -164,13 +166,13 @@ func NewPipelineOpts(ctx context.Context, transfer *IBCV2Transfer) (*PipelineOpt
 	opts.TimeoutBatchConcurrency = timeoutBatchConcurrency
 
 	if sourceChainConfig.GasTokenCoingeckoID == nil {
-		lmt.Logger(ctx).Warn("source chain has no gas token coingecko id configured, no ack tx or timeout tx gas cost info will be calculated")
+		lmt.Logger(ctx).Debug("source chain has no gas token coingecko id configured, no ack tx or timeout tx gas cost info will be calculated")
 	} else {
 		opts.SourceChainGasTokenCoingeckoID = *sourceChainConfig.GasTokenCoingeckoID
 	}
 
 	if destinationChainConfig.GasTokenCoingeckoID == nil {
-		lmt.Logger(ctx).Warn("destination chain has no gas token coingecko id configured, no recv tx gas cost info will be calculated")
+		lmt.Logger(ctx).Debug("destination chain has no gas token coingecko id configured, no recv tx gas cost info will be calculated")
 	} else {
 		opts.DestinationChainGasTokenCoingeckoID = *destinationChainConfig.GasTokenCoingeckoID
 	}
@@ -186,6 +188,9 @@ func NewPipelineOpts(ctx context.Context, transfer *IBCV2Transfer) (*PipelineOpt
 	} else {
 		opts.DestinationChainGasTokenDecimals = destinationChainConfig.GasTokenDecimals
 	}
+
+	opts.SourceChainGasTokenSymbol = sourceChainConfig.GasTokenSymbol
+	opts.DestinationChainGasTokenSymbol = destinationChainConfig.GasTokenSymbol
 
 	// Set finality offsets from config (nil means use native finality)
 	opts.SourceFinalityOffset = sourceChainIBCV2Config.FinalityOffset

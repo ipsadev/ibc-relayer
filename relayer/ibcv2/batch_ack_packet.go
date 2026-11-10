@@ -152,7 +152,7 @@ func (p BatchAckPacketProcessor) Process(ctx context.Context, transfers []*IBCV2
 
 			update := db.UpdateTransferAckTxParams{
 				AckTxHash:            pgtype.Text{Valid: true, String: ackTx.Hash},
-				AckTxTime:            pgtype.Timestamp{Valid: true, Time: ackTx.Timestamp},
+				AckTxTime:            pgtype.Timestamp{Valid: true, Time: ackTx.Timestamp.UTC()},
 				AckTxRelayerAddress:  pgtype.Text{Valid: true, String: ackTx.RelayerAddress},
 				SourceChainID:        transfer.GetSourceChainID(),
 				PacketSourceClientID: transfer.GetPacketSourceClientID(),

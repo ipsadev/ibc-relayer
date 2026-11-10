@@ -146,7 +146,7 @@ func (p CheckPacketCommitmentProcessor) Process(ctx context.Context, transfer *I
 	case ackTx != nil:
 		update := db.UpdateTransferAckTxParams{
 			AckTxHash:            pgtype.Text{Valid: true, String: ackTx.Hash},
-			AckTxTime:            pgtype.Timestamp{Valid: true, Time: ackTx.Timestamp},
+			AckTxTime:            pgtype.Timestamp{Valid: true, Time: ackTx.Timestamp.UTC()},
 			AckTxRelayerAddress:  pgtype.Text{Valid: true, String: ackTx.RelayerAddress},
 			SourceChainID:        transfer.GetSourceChainID(),
 			PacketSourceClientID: transfer.GetPacketSourceClientID(),
@@ -163,7 +163,7 @@ func (p CheckPacketCommitmentProcessor) Process(ctx context.Context, transfer *I
 	case timeoutTx != nil:
 		update := db.UpdateTransferTimeoutTxParams{
 			TimeoutTxHash:           pgtype.Text{Valid: true, String: timeoutTx.Hash},
-			TimeoutTxTime:           pgtype.Timestamp{Valid: true, Time: timeoutTx.Timestamp},
+			TimeoutTxTime:           pgtype.Timestamp{Valid: true, Time: timeoutTx.Timestamp.UTC()},
 			TimeoutTxRelayerAddress: pgtype.Text{Valid: true, String: timeoutTx.RelayerAddress},
 			SourceChainID:           transfer.GetSourceChainID(),
 			PacketSourceClientID:    transfer.GetPacketSourceClientID(),

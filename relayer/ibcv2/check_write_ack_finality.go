@@ -68,7 +68,7 @@ func (p CheckWriteAckFinalityProcessor) Process(ctx context.Context, transfer *I
 		finalizedTime := time.Now()
 
 		if err := p.storage.UpdateTransferWriteAckTxFinalizedTime(ctx, db.UpdateTransferWriteAckTxFinalizedTimeParams{
-			WriteAckTxFinalizedTime: pgtype.Timestamp{Valid: true, Time: finalizedTime},
+			WriteAckTxFinalizedTime: pgtype.Timestamp{Valid: true, Time: finalizedTime.UTC()},
 		}); err != nil {
 			return nil, fmt.Errorf("updating write ack tx finalized time: %w", err)
 		}
