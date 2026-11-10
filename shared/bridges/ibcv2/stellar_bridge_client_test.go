@@ -21,13 +21,15 @@ import (
 var _ BridgeClient = (*StellarBridgeClient)(nil)
 
 type fakeStellarRPC struct {
-	latest   protocol.GetLatestLedgerResponse
-	tx       protocol.GetTransactionResponse
-	ledger   protocol.GetLedgersResponse
-	simulate protocol.SimulateTransactionResponse
-	send     protocol.SendTransactionResponse
-	events   protocol.GetEventsResponse
-	err      error
+	latest    protocol.GetLatestLedgerResponse
+	tx        protocol.GetTransactionResponse
+	ledger    protocol.GetLedgersResponse
+	simulate  protocol.SimulateTransactionResponse
+	simulates []protocol.SimulateTransactionResponse
+	simCalls  int
+	send      protocol.SendTransactionResponse
+	events    protocol.GetEventsResponse
+	err       error
 }
 
 func (f *fakeStellarRPC) GetLatestLedger(context.Context) (protocol.GetLatestLedgerResponse, error) {
@@ -56,6 +58,14 @@ func (f *fakeStellarRPC) LoadAccount(context.Context, string) (txnbuild.Account,
 func (f *fakeStellarRPC) SimulateTransaction(
 	context.Context, protocol.SimulateTransactionRequest,
 ) (protocol.SimulateTransactionResponse, error) {
+	f.simCalls++
+	if len(f.simulates) > 0 {
+		index := f.simCalls - 1
+		if index >= len(f.simulates) {
+			index = len(f.simulates) - 1
+		}
+		return f.simulates[index], f.err
+	}
 	return f.simulate, f.err
 }
 
@@ -455,15 +465,21 @@ func sorobanDataB64(t *testing.T) string {
 	return base64.StdEncoding.EncodeToString(raw)
 }
 
-func TestRestoreArchivedEntriesRestoresWhenPreamblePresent(t *testing.T) {
+func TestPrepareRestoresWhenPreamblePresent(t *testing.T) {
 	data := sorobanDataB64(t)
 	rpc := &fakeStellarRPC{
-		simulate: protocol.SimulateTransactionResponse{
-			TransactionDataXDR: data,
-			MinResourceFee:     100,
-			RestorePreamble: &protocol.RestorePreamble{
+		simulates: []protocol.SimulateTransactionResponse{
+			{
 				TransactionDataXDR: data,
-				MinResourceFee:     50,
+				MinResourceFee:     100,
+				RestorePreamble: &protocol.RestorePreamble{
+					TransactionDataXDR: data,
+					MinResourceFee:     50,
+				},
+			},
+			{
+				TransactionDataXDR: data,
+				MinResourceFee:     100,
 			},
 		},
 		send: protocol.SendTransactionResponse{Status: "PENDING", Hash: "RESTORE"},
@@ -474,12 +490,19 @@ func TestRestoreArchivedEntriesRestoresWhenPreamblePresent(t *testing.T) {
 
 	client := signedStellarClient(t, rpc)
 
-	if err := client.restoreArchivedEntries(context.Background(), sampleHostFunction(t)); err != nil {
-		t.Fatalf("restore with a preamble must submit and succeed, got %v", err)
+	prepared, err := client.prepare(context.Background(), sampleHostFunction(t))
+	if err != nil {
+		t.Fatalf("prepare with a preamble must restore and succeed, got %v", err)
+	}
+	if prepared == nil {
+		t.Fatal("prepare must return a transaction")
+	}
+	if rpc.simCalls != 2 {
+		t.Fatalf("prepare must simulate twice when restoring, simulated %d times", rpc.simCalls)
 	}
 }
 
-func TestRestoreArchivedEntriesNoopWithoutPreamble(t *testing.T) {
+func TestPrepareSimulatesOnceWithoutPreamble(t *testing.T) {
 	rpc := &fakeStellarRPC{
 		simulate: protocol.SimulateTransactionResponse{
 			TransactionDataXDR: sorobanDataB64(t),
@@ -489,7 +512,14 @@ func TestRestoreArchivedEntriesNoopWithoutPreamble(t *testing.T) {
 
 	client := signedStellarClient(t, rpc)
 
-	if err := client.restoreArchivedEntries(context.Background(), sampleHostFunction(t)); err != nil {
-		t.Fatalf("with no preamble restore must be a no-op, got %v", err)
+	prepared, err := client.prepare(context.Background(), sampleHostFunction(t))
+	if err != nil {
+		t.Fatalf("prepare without a preamble must succeed, got %v", err)
+	}
+	if prepared == nil {
+		t.Fatal("prepare must return a transaction")
+	}
+	if rpc.simCalls != 1 {
+		t.Fatalf("prepare must simulate exactly once on the common path, simulated %d times", rpc.simCalls)
 	}
 }

@@ -17,9 +17,6 @@ import (
 
 const stellarBaseFee = txnbuild.MinBaseFee
 
-// decodeHostFunctions reads the length-prefixed XDR array the proof API returns
-// for Stellar: a big-endian u32 count followed by that many HostFunction
-// values, to be submitted in order.
 func decodeHostFunctions(raw []byte) ([]xdr.HostFunction, error) {
 	if len(raw) < 4 {
 		return nil, fmt.Errorf("host function array is %d bytes, too short for a count", len(raw))
@@ -47,10 +44,6 @@ func decodeHostFunctions(raw []byte) ([]xdr.HostFunction, error) {
 	return functions, nil
 }
 
-// DeliverTx submits each host function the proof API produced as its own
-// Soroban transaction, in order, stopping at the first failure. Soroban allows
-// one host-function invocation per transaction, so a batch cannot be atomic;
-// the reported BridgeTx is the last one that landed.
 const (
 	inclusionPoll    = 2 * time.Second
 	inclusionTimeout = 60 * time.Second
@@ -79,10 +72,6 @@ func (c *StellarBridgeClient) DeliverTx(ctx context.Context, raw []byte, _ strin
 			return nil, fmt.Errorf("submitting host function %d of %d: %w", i+1, len(functions), err)
 		}
 
-		// A later function reads state an earlier one writes: recv_packet
-		// verifies against the consensus state update_client stores. Soroban
-		// takes one host function per transaction, so the next simulation must
-		// run against a ledger that already contains the previous one.
 		if i+1 < len(functions) {
 			if err := c.awaitInclusion(ctx, last.Hash); err != nil {
 				return nil, fmt.Errorf(
@@ -128,29 +117,7 @@ func (c *StellarBridgeClient) submitHostFunction(
 ) (*BridgeTx, error) {
 	kp := c.signer.Keypair()
 
-	if err := c.restoreArchivedEntries(ctx, function); err != nil {
-		return nil, fmt.Errorf("restoring archived footprint: %w", err)
-	}
-
-	account, err := c.rpc.LoadAccount(ctx, kp.Address())
-	if err != nil {
-		return nil, fmt.Errorf("loading account %s: %w", kp.Address(), err)
-	}
-
-	params := txnbuild.TransactionParams{
-		SourceAccount:        account,
-		IncrementSequenceNum: true,
-		Operations:           []txnbuild.Operation{&txnbuild.InvokeHostFunction{HostFunction: function}},
-		BaseFee:              stellarBaseFee,
-		Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(300)},
-	}
-
-	tx, err := txnbuild.NewTransaction(params)
-	if err != nil {
-		return nil, fmt.Errorf("building the transaction: %w", err)
-	}
-
-	prepared, err := c.prepare(ctx, tx, params)
+	prepared, err := c.prepare(ctx, function)
 	if err != nil {
 		return nil, err
 	}
@@ -180,46 +147,49 @@ func (c *StellarBridgeClient) submitHostFunction(
 	}, nil
 }
 
-// restoreArchivedEntries simulates the host function and, if the simulation
-// reports a restore preamble (archived ledger entries the invocation needs),
-// submits a RestoreFootprint transaction and waits for it to land. When there
-// is nothing to restore it is a no-op and the normal prepare step proceeds.
-func (c *StellarBridgeClient) restoreArchivedEntries(ctx context.Context, function xdr.HostFunction) error {
+func (c *StellarBridgeClient) simulateHostFunction(
+	ctx context.Context,
+	function xdr.HostFunction,
+) (protocol.SimulateTransactionResponse, *txnbuild.Transaction, txnbuild.TransactionParams, error) {
+	var zero protocol.SimulateTransactionResponse
+
 	kp := c.signer.Keypair()
 
 	account, err := c.rpc.LoadAccount(ctx, kp.Address())
 	if err != nil {
-		return fmt.Errorf("loading account %s: %w", kp.Address(), err)
+		return zero, nil, txnbuild.TransactionParams{}, fmt.Errorf("loading account %s: %w", kp.Address(), err)
 	}
 
-	probe, err := txnbuild.NewTransaction(txnbuild.TransactionParams{
+	params := txnbuild.TransactionParams{
 		SourceAccount:        account,
 		IncrementSequenceNum: true,
 		Operations:           []txnbuild.Operation{&txnbuild.InvokeHostFunction{HostFunction: function}},
 		BaseFee:              stellarBaseFee,
 		Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(300)},
-	})
-	if err != nil {
-		return fmt.Errorf("building the restore probe: %w", err)
 	}
 
-	envelope, err := probe.Base64()
+	tx, err := txnbuild.NewTransaction(params)
 	if err != nil {
-		return fmt.Errorf("encoding the restore probe: %w", err)
+		return zero, nil, params, fmt.Errorf("building the transaction: %w", err)
+	}
+
+	envelope, err := tx.Base64()
+	if err != nil {
+		return zero, nil, params, fmt.Errorf("encoding the transaction for simulation: %w", err)
 	}
 
 	simulated, err := c.rpc.SimulateTransaction(ctx, protocol.SimulateTransactionRequest{Transaction: envelope})
 	if err != nil {
-		return fmt.Errorf("simulating the restore probe: %w", err)
+		return zero, nil, params, fmt.Errorf("simulating the transaction: %w", err)
 	}
 
-	// Let prepare surface a genuine simulation error; only act on a restore
-	// preamble here.
-	if simulated.Error != "" || simulated.RestorePreamble == nil || simulated.RestorePreamble.TransactionDataXDR == "" {
-		return nil
-	}
+	return simulated, tx, params, nil
+}
 
-	raw, err := base64.StdEncoding.DecodeString(simulated.RestorePreamble.TransactionDataXDR)
+func (c *StellarBridgeClient) restoreFootprint(ctx context.Context, preamble *protocol.RestorePreamble) error {
+	kp := c.signer.Keypair()
+
+	raw, err := base64.StdEncoding.DecodeString(preamble.TransactionDataXDR)
 	if err != nil {
 		return fmt.Errorf("decoding the restore preamble data: %w", err)
 	}
@@ -229,16 +199,16 @@ func (c *StellarBridgeClient) restoreArchivedEntries(ctx context.Context, functi
 		return fmt.Errorf("decoding the restore preamble soroban data: %w", err)
 	}
 
-	restoreAccount, err := c.rpc.LoadAccount(ctx, kp.Address())
+	account, err := c.rpc.LoadAccount(ctx, kp.Address())
 	if err != nil {
 		return fmt.Errorf("loading account %s for restore: %w", kp.Address(), err)
 	}
 
 	restore, err := txnbuild.NewTransaction(txnbuild.TransactionParams{
-		SourceAccount:        restoreAccount,
+		SourceAccount:        account,
 		IncrementSequenceNum: true,
 		Operations:           []txnbuild.Operation{&txnbuild.RestoreFootprint{Ext: xdr.TransactionExt{V: 1, SorobanData: &data}}},
-		BaseFee:              stellarBaseFee + simulated.RestorePreamble.MinResourceFee,
+		BaseFee:              stellarBaseFee + preamble.MinResourceFee,
 		Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(300)},
 	})
 	if err != nil {
@@ -250,12 +220,12 @@ func (c *StellarBridgeClient) restoreArchivedEntries(ctx context.Context, functi
 		return fmt.Errorf("signing the restore transaction: %w", err)
 	}
 
-	restoreEnvelope, err := signed.Base64()
+	envelope, err := signed.Base64()
 	if err != nil {
 		return fmt.Errorf("encoding the restore transaction: %w", err)
 	}
 
-	sent, err := c.rpc.SendTransaction(ctx, protocol.SendTransactionRequest{Transaction: restoreEnvelope})
+	sent, err := c.rpc.SendTransaction(ctx, protocol.SendTransactionRequest{Transaction: envelope})
 	if err != nil {
 		return fmt.Errorf("submitting the restore transaction: %w", err)
 	}
@@ -266,26 +236,29 @@ func (c *StellarBridgeClient) restoreArchivedEntries(ctx context.Context, functi
 	return c.awaitInclusion(ctx, sent.Hash)
 }
 
-// prepare runs the simulation Soroban requires and folds the resulting
-// footprint and resource fee back into the transaction. Submitting without it
-// fails for insufficient resources rather than for anything meaningful.
 func (c *StellarBridgeClient) prepare(
 	ctx context.Context,
-	tx *txnbuild.Transaction,
-	params txnbuild.TransactionParams,
+	function xdr.HostFunction,
 ) (*txnbuild.Transaction, error) {
-	envelope, err := tx.Base64()
+	simulated, tx, params, err := c.simulateHostFunction(ctx, function)
 	if err != nil {
-		return nil, fmt.Errorf("encoding the transaction for simulation: %w", err)
+		return nil, err
 	}
 
-	simulated, err := c.rpc.SimulateTransaction(
-		ctx,
-		protocol.SimulateTransactionRequest{Transaction: envelope},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("simulating the transaction: %w", err)
+	if simulated.RestorePreamble != nil && simulated.RestorePreamble.TransactionDataXDR != "" {
+		if err := c.restoreFootprint(ctx, simulated.RestorePreamble); err != nil {
+			return nil, fmt.Errorf("restoring archived footprint: %w", err)
+		}
+
+		simulated, tx, params, err = c.simulateHostFunction(ctx, function)
+		if err != nil {
+			return nil, err
+		}
+		if simulated.RestorePreamble != nil && simulated.RestorePreamble.TransactionDataXDR != "" {
+			return nil, fmt.Errorf("entries remain archived after a restore")
+		}
 	}
+
 	if simulated.Error != "" {
 		return nil, fmt.Errorf("the simulation failed: %s", simulated.Error)
 	}
