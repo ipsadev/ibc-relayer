@@ -1,0 +1,58 @@
+package ibcv2
+
+import (
+	"math/big"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestEVMTransferPayloadDecodesICS20(t *testing.T) {
+	amount := new(big.Int)
+	amount.SetString("3420000000000000", 10)
+
+	value, err := ics20ABIArguments.Pack(
+		"0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+		"0x06ecf411be934d0ecb80a247508ca96c8030808e",
+		"GDKP7AGPKAVJUL6AGGJDXOVLWIOVMZ2YDDKGCY4YSRHHOV6BMJMLWOEC",
+		amount,
+		"",
+	)
+	require.NoError(t, err)
+
+	payload := EVMTransferPayload("transfer", value)
+
+	assert.Equal(t, ApplicationICS20, payload.Application)
+	assert.Equal(t, "3420000000000000", payload.Amount)
+	assert.Equal(t, "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", payload.Denom)
+	assert.Equal(t, "0x06ecf411be934d0ecb80a247508ca96c8030808e", payload.Sender)
+	assert.Equal(t, "GDKP7AGPKAVJUL6AGGJDXOVLWIOVMZ2YDDKGCY4YSRHHOV6BMJMLWOEC", payload.Receiver)
+}
+
+func TestEVMTransferPayloadGMPHasNoAmount(t *testing.T) {
+	payload := EVMTransferPayload("gmpport", []byte("whatever"))
+
+	assert.Equal(t, ApplicationICS27, payload.Application)
+	assert.Empty(t, payload.Amount)
+	assert.Empty(t, payload.Denom)
+}
+
+func TestEVMTransferPayloadUnknownPort(t *testing.T) {
+	payload := EVMTransferPayload("other", nil)
+
+	assert.Empty(t, payload.Application)
+	assert.Empty(t, payload.Amount)
+}
+
+func TestJSONTransferPayloadDecodesICS20(t *testing.T) {
+	value := []byte(`{"denom":"uatom","amount":"1500000","sender":"cosmos1abc","receiver":"GDKP7AGP"}`)
+
+	payload := JSONTransferPayload("transfer", value)
+
+	assert.Equal(t, ApplicationICS20, payload.Application)
+	assert.Equal(t, "1500000", payload.Amount)
+	assert.Equal(t, "uatom", payload.Denom)
+	assert.Equal(t, "cosmos1abc", payload.Sender)
+	assert.Equal(t, "GDKP7AGP", payload.Receiver)
+}

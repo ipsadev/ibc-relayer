@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -156,6 +157,8 @@ func (s *RelayerAPIService) Relay(
 		zap.Int("packet_count", len(packets)),
 	)
 
+	sourceFee, sourceFeeDenom, hasSourceFee := s.sourceTransferFee(ctx, client, sourceChainID, txHash)
+
 	txErr := s.db.ExecTx(ctx, func(q *db.Queries) error {
 		if err := q.InsertRelayRequest(ctx, db.InsertRelayRequestParams{
 			SourceChainID: sourceChainID,
@@ -191,6 +194,22 @@ func (s *RelayerAPIService) Relay(
 
 			if err := q.InsertIBCV2Transfer(ctx, insert); err != nil {
 				return fmt.Errorf("inserting packet sequence %d: %w", packet.Sequence, err)
+			}
+
+			if err := s.storeTransferMetadata(ctx, q, sourceChainID, packet); err != nil {
+				return fmt.Errorf("storing metadata for packet sequence %d: %w", packet.Sequence, err)
+			}
+
+			if hasSourceFee {
+				if err := storeSourceFee(ctx, q, sourceChainID, packet, sourceFee, sourceFeeDenom); err != nil {
+					return fmt.Errorf("storing source fee for packet sequence %d: %w", packet.Sequence, err)
+				}
+			}
+
+			if packet.FastFill != nil {
+				if err := storeFastFill(ctx, q, sourceChainID, packet, *packet.FastFill); err != nil {
+					return fmt.Errorf("storing fast fill for packet sequence %d: %w", packet.Sequence, err)
+				}
 			}
 
 			lmt.Logger(ctx).Info("submitted packet to be relayed",
@@ -234,4 +253,107 @@ func toTxInfo(hash pgtype.Text, chainID string) *protorelayerapi.TransactionInfo
 		return nil
 	}
 	return &protorelayerapi.TransactionInfo{TxHash: hash.String, ChainId: chainID}
+}
+
+func (s *RelayerAPIService) storeTransferMetadata(ctx context.Context, q *db.Queries, sourceChainID string, packet *bridgeibcv2.PacketInfo) error {
+	transfer := packet.Transfer
+	if transfer == nil || transfer.Application == "" {
+		return nil
+	}
+
+	params := db.UpdateTransferMetadataParams{
+		SourceChainID:        sourceChainID,
+		PacketSourceClientID: packet.SourceClient,
+		PacketSequenceNumber: int32(packet.Sequence), //nolint:gosec // G115 bounded conversion
+		Application:          pgtype.Text{String: transfer.Application, Valid: true},
+	}
+
+	if transfer.Sender != "" {
+		params.Sender = pgtype.Text{String: transfer.Sender, Valid: true}
+	}
+	if transfer.Receiver != "" {
+		params.Receiver = pgtype.Text{String: transfer.Receiver, Valid: true}
+	}
+	if transfer.Denom != "" {
+		params.Denom = pgtype.Text{String: transfer.Denom, Valid: true}
+		params.TokenOrigin = pgtype.Text{String: transfer.Denom, Valid: true}
+
+		if decimals, ok := s.tokenDecimals(sourceChainID, transfer.Denom, transfer.Decimals); ok {
+			params.TokenOriginDecimals = pgtype.Int4{Int32: int32(decimals), Valid: true}
+		}
+	}
+	if transfer.Amount != "" {
+		var amount pgtype.Numeric
+		if err := amount.Scan(transfer.Amount); err != nil {
+			return fmt.Errorf("parsing transfer amount %q: %w", transfer.Amount, err)
+		}
+		params.TransferAmount = amount
+	}
+
+	return q.UpdateTransferMetadata(ctx, params)
+}
+
+func (s *RelayerAPIService) tokenDecimals(chainID string, denom string, onChain *uint8) (uint8, bool) {
+	if chain, err := s.config.GetChainConfig(chainID); err == nil {
+		if decimals, ok := chain.TokenDecimals(denom); ok {
+			return decimals, true
+		}
+	}
+
+	if onChain != nil {
+		return *onChain, true
+	}
+
+	return 0, false
+}
+
+func (s *RelayerAPIService) sourceTransferFee(
+	ctx context.Context,
+	client bridgeibcv2.BridgeClient,
+	sourceChainID string,
+	txHash string,
+) (*big.Int, string, bool) {
+	chain, err := s.config.GetChainConfig(sourceChainID)
+	if err != nil || chain.GasTokenSymbol == "" {
+		return nil, "", false
+	}
+
+	fee, err := client.TxFee(ctx, txHash)
+	if err != nil || fee == nil {
+		return nil, "", false
+	}
+
+	return fee, chain.GasTokenSymbol, true
+}
+
+func storeSourceFee(
+	ctx context.Context,
+	q *db.Queries,
+	sourceChainID string,
+	packet *bridgeibcv2.PacketInfo,
+	fee *big.Int,
+	denom string,
+) error {
+	return q.UpdateTransferSourceFee(ctx, db.UpdateTransferSourceFeeParams{
+		FeeOrigin:            pgtype.Numeric{Int: fee, Valid: true},
+		FeeOriginDenom:       pgtype.Text{String: denom, Valid: true},
+		SourceChainID:        sourceChainID,
+		PacketSourceClientID: packet.SourceClient,
+		PacketSequenceNumber: int32(packet.Sequence), //nolint:gosec // G115 bounded conversion
+	})
+}
+
+func storeFastFill(
+	ctx context.Context,
+	q *db.Queries,
+	sourceChainID string,
+	packet *bridgeibcv2.PacketInfo,
+	fastFill bool,
+) error {
+	return q.UpdateTransferFastFill(ctx, db.UpdateTransferFastFillParams{
+		FastFill:             pgtype.Bool{Bool: fastFill, Valid: true},
+		SourceChainID:        sourceChainID,
+		PacketSourceClientID: packet.SourceClient,
+		PacketSequenceNumber: int32(packet.Sequence), //nolint:gosec // G115 bounded conversion
+	})
 }

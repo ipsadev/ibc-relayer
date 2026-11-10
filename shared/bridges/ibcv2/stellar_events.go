@@ -194,7 +194,47 @@ func decodePacketInfo(event xdr.ContractEvent, closeTime time.Time) (*PacketInfo
 		DestinationClient: destination,
 		TimeoutTimestamp:  time.Unix(int64(timeout), 0).UTC(),
 		Timestamp:         closeTime,
+		Transfer:          decodeStellarTransfer(packet),
 	}, nil
+}
+
+func decodeStellarTransfer(packet xdr.ScVal) *TransferPayload {
+	payloads, ok := scMapField(packet, "payloads")
+	if !ok {
+		return nil
+	}
+
+	entries, ok := payloads.GetVec()
+	if !ok || entries == nil || len(*entries) == 0 {
+		return nil
+	}
+
+	first := (*entries)[0]
+
+	port, _ := scString(first, "source_port")
+
+	encoding, _ := scString(first, "encoding")
+
+	value, ok := scBytes(first, "value")
+	if !ok {
+		return nil
+	}
+
+	return DecodeTransferPayload(port, encoding, value)
+}
+
+func scBytes(value xdr.ScVal, name string) ([]byte, bool) {
+	field, ok := scMapField(value, name)
+	if !ok {
+		return nil, false
+	}
+
+	raw, ok := field.GetBytes()
+	if !ok {
+		return nil, false
+	}
+
+	return []byte(raw), true
 }
 
 func scMapField(value xdr.ScVal, name string) (xdr.ScVal, bool) {
