@@ -182,10 +182,17 @@ type ChainConfig struct {
 }
 
 type TokenConfig struct {
-	Denom       string `yaml:"denom"`
-	Symbol      string `yaml:"symbol"`
-	Decimals    uint8  `yaml:"decimals"`
-	CoingeckoID string `yaml:"coingecko_id"`
+	Denom        string                      `yaml:"denom"`
+	Symbol       string                      `yaml:"symbol"`
+	Decimals     uint8                       `yaml:"decimals"`
+	CoingeckoID  string                      `yaml:"coingecko_id"`
+	Destinations map[string]TokenDestination `yaml:"destinations"`
+}
+
+type TokenDestination struct {
+	Denom    string `yaml:"denom"`
+	Symbol   string `yaml:"symbol"`
+	Decimals uint8  `yaml:"decimals"`
 }
 
 func (c ChainConfig) TokenDecimals(denom string) (uint8, bool) {
@@ -196,6 +203,17 @@ func (c ChainConfig) TokenDecimals(denom string) (uint8, bool) {
 	}
 
 	return 0, false
+}
+
+func (c ChainConfig) TokenDestination(denom string, destinationChainID string) (TokenDestination, bool) {
+	for _, token := range c.Tokens {
+		if strings.EqualFold(token.Denom, denom) {
+			destination, ok := token.Destinations[destinationChainID]
+			return destination, ok
+		}
+	}
+
+	return TokenDestination{}, false
 }
 
 type SignerGasAlertThresholdsConfig struct {

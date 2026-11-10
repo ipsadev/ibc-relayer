@@ -144,3 +144,10 @@ WHERE transfer_amount IS NOT NULL
   AND status IN ('COMPLETE_WITH_ACK', 'COMPLETE_WITH_WRITE_ACK_SUCCESS')
 GROUP BY denom, token_origin_decimals
 ORDER BY transfers DESC;
+
+-- name: ListTransfersToBackfill :many
+SELECT id, source_chain_id, destination_chain_id, source_tx_hash, recv_tx_hash,
+       packet_source_client_id, packet_sequence_number
+FROM ibcv2_transfers
+WHERE fee_origin IS NULL OR transfer_amount IS NULL
+ORDER BY id;
