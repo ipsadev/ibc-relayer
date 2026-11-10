@@ -2,17 +2,20 @@ package ibcv2
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stellar/go-stellar-sdk/keypair"
 	protocol "github.com/stellar/go-stellar-sdk/protocols/rpc"
 	"github.com/stellar/go-stellar-sdk/txnbuild"
 	"github.com/stellar/go-stellar-sdk/xdr"
 
 	"github.com/cosmos/ibc-relayer/shared/config"
+	"github.com/cosmos/ibc-relayer/shared/signing"
 )
 
 var _ BridgeClient = (*StellarBridgeClient)(nil)
@@ -412,5 +415,81 @@ func TestRouterContractRejectsABadStrkey(t *testing.T) {
 	client := stellarClient(t, &fakeStellarRPC{})
 	if _, err := client.routerContract(); err == nil {
 		t.Fatal("a router id that is not a contract strkey must be rejected")
+	}
+}
+
+func signedStellarClient(t *testing.T, rpc StellarRPC) *StellarBridgeClient {
+	t.Helper()
+
+	kp, err := keypair.Random()
+	if err != nil {
+		t.Fatalf("generating a keypair: %v", err)
+	}
+	signer, err := signing.NewLocalStellarSigner(kp.Seed())
+	if err != nil {
+		t.Fatalf("building the signer: %v", err)
+	}
+
+	cfg := &config.StellarConfig{
+		RPC:                   "http://127.0.0.1:8000",
+		GatewayGRPCAddress:    "127.0.0.1:9100",
+		NetworkPassphrase:     "Test SDF Network ; September 2015",
+		RouterContractID:      "CAAAA",
+		PinnedQuorumSetHashes: []string{strings.Repeat("ab", 32)},
+	}
+	client, err := NewStellarBridgeClient("stellar-testnet", cfg, rpc, signer)
+	if err != nil {
+		t.Fatalf("building the client: %v", err)
+	}
+	return client
+}
+
+func sorobanDataB64(t *testing.T) string {
+	t.Helper()
+
+	var data xdr.SorobanTransactionData
+	raw, err := data.MarshalBinary()
+	if err != nil {
+		t.Fatalf("encoding soroban data: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func TestRestoreArchivedEntriesRestoresWhenPreamblePresent(t *testing.T) {
+	data := sorobanDataB64(t)
+	rpc := &fakeStellarRPC{
+		simulate: protocol.SimulateTransactionResponse{
+			TransactionDataXDR: data,
+			MinResourceFee:     100,
+			RestorePreamble: &protocol.RestorePreamble{
+				TransactionDataXDR: data,
+				MinResourceFee:     50,
+			},
+		},
+		send: protocol.SendTransactionResponse{Status: "PENDING", Hash: "RESTORE"},
+		tx: protocol.GetTransactionResponse{
+			TransactionDetails: protocol.TransactionDetails{Status: protocol.TransactionStatusSuccess},
+		},
+	}
+
+	client := signedStellarClient(t, rpc)
+
+	if err := client.restoreArchivedEntries(context.Background(), sampleHostFunction(t)); err != nil {
+		t.Fatalf("restore with a preamble must submit and succeed, got %v", err)
+	}
+}
+
+func TestRestoreArchivedEntriesNoopWithoutPreamble(t *testing.T) {
+	rpc := &fakeStellarRPC{
+		simulate: protocol.SimulateTransactionResponse{
+			TransactionDataXDR: sorobanDataB64(t),
+			MinResourceFee:     100,
+		},
+	}
+
+	client := signedStellarClient(t, rpc)
+
+	if err := client.restoreArchivedEntries(context.Background(), sampleHostFunction(t)); err != nil {
+		t.Fatalf("with no preamble restore must be a no-op, got %v", err)
 	}
 }
