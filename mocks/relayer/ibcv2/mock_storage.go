@@ -352,6 +352,53 @@ func (_c *MockStorage_UpdateTransferRecvTx_Call) RunAndReturn(run func(context.C
 	return _c
 }
 
+// UpdateTransferDestinationFee provides a mock function with given fields: ctx, arg
+func (_m *MockStorage) UpdateTransferDestinationFee(ctx context.Context, arg db.UpdateTransferDestinationFeeParams) error {
+	ret := _m.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateTransferDestinationFee")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, db.UpdateTransferDestinationFeeParams) error); ok {
+		r0 = rf(ctx, arg)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockStorage_UpdateTransferDestinationFee_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateTransferDestinationFee'
+type MockStorage_UpdateTransferDestinationFee_Call struct {
+	*mock.Call
+}
+
+// UpdateTransferDestinationFee is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.UpdateTransferDestinationFeeParams
+func (_e *MockStorage_Expecter) UpdateTransferDestinationFee(ctx interface{}, arg interface{}) *MockStorage_UpdateTransferDestinationFee_Call {
+	return &MockStorage_UpdateTransferDestinationFee_Call{Call: _e.mock.On("UpdateTransferDestinationFee", ctx, arg)}
+}
+
+func (_c *MockStorage_UpdateTransferDestinationFee_Call) Run(run func(ctx context.Context, arg db.UpdateTransferDestinationFeeParams)) *MockStorage_UpdateTransferDestinationFee_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(db.UpdateTransferDestinationFeeParams))
+	})
+	return _c
+}
+
+func (_c *MockStorage_UpdateTransferDestinationFee_Call) Return(_a0 error) *MockStorage_UpdateTransferDestinationFee_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockStorage_UpdateTransferDestinationFee_Call) RunAndReturn(run func(context.Context, db.UpdateTransferDestinationFeeParams) error) *MockStorage_UpdateTransferDestinationFee_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateTransferRecvTxGasCostUSD provides a mock function with given fields: ctx, arg
 func (_m *MockStorage) UpdateTransferRecvTxGasCostUSD(ctx context.Context, arg db.UpdateTransferRecvTxGasCostUSDParams) error {
 	ret := _m.Called(ctx, arg)

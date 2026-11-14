@@ -141,7 +141,7 @@ func (p BatchRecvPacketProcessor) Process(ctx context.Context, transfers []*IBCV
 
 			update := db.UpdateTransferRecvTxParams{
 				RecvTxHash:           pgtype.Text{Valid: true, String: recvTx.Hash},
-				RecvTxTime:           pgtype.Timestamp{Valid: true, Time: recvTx.Timestamp},
+				RecvTxTime:           pgtype.Timestamp{Valid: true, Time: recvTx.Timestamp.UTC()},
 				RecvTxRelayerAddress: pgtype.Text{Valid: true, String: recvTx.RelayerAddress},
 				SourceChainID:        transfer.GetSourceChainID(),
 				PacketSourceClientID: transfer.GetPacketSourceClientID(),

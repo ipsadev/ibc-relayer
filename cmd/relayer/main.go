@@ -35,6 +35,7 @@ var (
 	configPath          = flag.String("config", "./config/local/config.yml", "path to relayer config file")
 	enableIBCV2Relaying = flag.Bool("ibcv2-relaying", true, "if ibcv2 relaying should be enabled")
 	dbMigrate           = flag.Bool("db-migrate", false, "run database migrations before starting the relayer")
+	backfill            = flag.Bool("backfill", false, "backfill metadata and fees for existing transfers, then exit")
 )
 
 func main() {
@@ -42,7 +43,8 @@ func main() {
 	// that exits after migrations. Strip the subcommand token so flag.Parse
 	// sees the remaining flags uniformly.
 	migrateMode := isMigrateSubcommand()
-	if migrateMode {
+	backfillMode := isBackfillSubcommand()
+	if migrateMode || backfillMode {
 		os.Args = append(os.Args[:1], os.Args[2:]...)
 	}
 	flag.Parse()
@@ -55,10 +57,11 @@ func main() {
 	promMetrics := metrics.NewPromMetrics()
 	ctx = metrics.ContextWithMetrics(ctx, promMetrics)
 
-	cfg, err := config.LoadConfig(*configPath)
+	cfg, configSource, err := config.LoadConfigFromEnvOrFile(*configPath)
 	if err != nil {
-		lmt.Logger(ctx).Fatal("Unable to load config", zap.Error(err))
+		lmt.Logger(ctx).Fatal("Unable to load config", zap.String("source", configSource), zap.Error(err))
 	}
+	lmt.Logger(ctx).Info("Loaded relayer config", zap.String("source", configSource))
 	ctx = config.ConfigReaderContext(ctx, config.NewConfigReader(cfg))
 
 	dsn := config.GetConfigReader(ctx).GetPostgresConnString()
@@ -105,6 +108,13 @@ func main() {
 		}
 		signerConn = conn
 		defer signerConn.Close()
+	case os.Getenv(inlineKeysVariable) != "":
+		keys, err := ParseChainIDToPrivateKeyMap([]byte(os.Getenv(inlineKeysVariable)))
+		if err != nil {
+			lmt.Logger(ctx).Fatal("Failed to parse the chain id -> private key map in "+inlineKeysVariable, zap.Error(err))
+		}
+		ibcv2ChainIDToPrivateKey = keys
+		lmt.Logger(ctx).Info("Using local keys for signing", zap.String("source", inlineKeysVariable))
 	case signing.KeysPath != "":
 		keys, err := LoadChainIDToPrivateKeyMap(signing.KeysPath)
 		if err != nil {
@@ -113,7 +123,7 @@ func main() {
 		ibcv2ChainIDToPrivateKey = keys
 		lmt.Logger(ctx).Info("Using local keys for signing", zap.String("keys_path", signing.KeysPath))
 	default:
-		lmt.Logger(ctx).Fatal("No signing configuration: set either signing.grpc_address or signing.keys_path")
+		lmt.Logger(ctx).Fatal("No signing configuration: set signing.grpc_address, " + inlineKeysVariable + " or signing.keys_path")
 	}
 
 	ibcv2ClientManager, err = ibcv2.NewClientManagerFromConfig(
@@ -126,6 +136,14 @@ func main() {
 	)
 	if err != nil {
 		lmt.Logger(ctx).Fatal("error creating ibcv2 client manager from config", zap.Error(err))
+	}
+
+	if backfillMode || *backfill {
+		if err := runBackfill(ctx, config.GetConfigReader(ctx), ibcv2ClientManager, pool); err != nil {
+			lmt.Logger(ctx).Fatal("Failed to backfill transfers", zap.Error(err))
+		}
+		pool.Close()
+		return
 	}
 
 	var coingeckoClient ibcv2.PriceClient
@@ -169,7 +187,7 @@ func main() {
 	} else {
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}))) //nolint:gosec // proof relayer is an internal service
 	}
-	opts = append(opts, grpc.WithUnaryInterceptor(metrics.UnaryClientInterceptor))
+	opts = append(opts, grpc.WithChainUnaryInterceptor(metrics.UnaryClientInterceptor, proofAPITimeoutInterceptor(proofRelayerConfig.Timeout)))
 
 	opts = append(opts, grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1024*1024*10)))
 
@@ -182,7 +200,16 @@ func main() {
 		)
 	}
 
-	relayer := proofapi.NewProofApiServiceClient(conn)
+	var proofCacheTTL time.Duration
+	if proofRelayerConfig.ProofCacheTTL != nil {
+		proofCacheTTL = *proofRelayerConfig.ProofCacheTTL
+	}
+
+	relayer := ibcv2.NewCachingProofAPIClient(
+		proofapi.NewProofApiServiceClient(conn),
+		proofCacheTTL,
+		proofRelayerConfig.ProofCacheMaxUses,
+	)
 	defer conn.Close()
 
 	// create storage for ibcv2 transactions
@@ -222,12 +249,18 @@ func main() {
 	}
 }
 
+const inlineKeysVariable = "RELAYER_KEYS_JSON"
+
 func LoadChainIDToPrivateKeyMap(keysPath string) (map[string]string, error) {
 	keysBytes, err := os.ReadFile(keysPath)
 	if err != nil {
 		return nil, err
 	}
 
+	return ParseChainIDToPrivateKeyMap(keysBytes)
+}
+
+func ParseChainIDToPrivateKeyMap(keysBytes []byte) (map[string]string, error) {
 	rawKeysMap := make(map[string]map[string]string)
 	if err := json.Unmarshal(keysBytes, &rawKeysMap); err != nil {
 		return nil, err
@@ -239,4 +272,17 @@ func LoadChainIDToPrivateKeyMap(keysPath string) (map[string]string, error) {
 	}
 
 	return keysMap, nil
+}
+
+func proofAPITimeoutInterceptor(timeout *time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, request, reply any, conn *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if timeout == nil {
+			return invoker(ctx, method, request, reply, conn, opts...)
+		}
+
+		deadlineCtx, cancel := context.WithTimeout(ctx, *timeout)
+		defer cancel()
+
+		return invoker(deadlineCtx, method, request, reply, conn, opts...)
+	}
 }

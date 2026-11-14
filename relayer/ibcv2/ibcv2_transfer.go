@@ -35,6 +35,7 @@ type IBCV2Transfer struct {
 	RecvTxTime           *time.Time
 	RecvTxRelayerAddress *string
 	RecvTxGasCostUSD     *big.Int
+	FeeDestination       *big.Int
 
 	WriteAckTxHash          *string
 	WriteAckTxTime          *time.Time
@@ -110,6 +111,11 @@ func NewIBCV2Transfer(ctx context.Context, transfer db.Ibcv2Transfer) *IBCV2Tran
 		timeoutTxGasCostUSD = transfer.TimeoutTxGasCostUsd.Int
 	}
 
+	var feeDestination *big.Int
+	if transfer.FeeDestination.Valid {
+		feeDestination = transfer.FeeDestination.Int
+	}
+
 	logger := lmt.Logger(ctx).With(
 		zap.String("source_chain_id", transfer.SourceChainID),
 		zap.String("destination_chain_id", transfer.DestinationChainID),
@@ -136,6 +142,7 @@ func NewIBCV2Transfer(ctx context.Context, transfer db.Ibcv2Transfer) *IBCV2Tran
 		RecvTxTime:                nullTime(transfer.RecvTxTime),
 		RecvTxRelayerAddress:      nullStr(transfer.RecvTxRelayerAddress),
 		RecvTxGasCostUSD:          recvTxGasCostUSD,
+		FeeDestination:            feeDestination,
 		WriteAckTxHash:            nullStr(transfer.WriteAckTxHash),
 		WriteAckTxTime:            nullTime(transfer.WriteAckTxTime),
 		WriteAckStatus:            writeAckStatus,
@@ -232,6 +239,13 @@ func (e *IBCV2Transfer) GetRecvGasCostUSD() (*big.Int, bool) {
 		return nil, false
 	}
 	return e.RecvTxGasCostUSD, true
+}
+
+func (e *IBCV2Transfer) GetDestinationFee() (*big.Int, bool) {
+	if e.FeeDestination == nil {
+		return nil, false
+	}
+	return e.FeeDestination, true
 }
 
 func (e *IBCV2Transfer) GetWriteAckTxHash() (string, bool) {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"sync"
@@ -64,6 +65,43 @@ type EVMBridgeClient struct {
 
 	gasFeeCapMultiplier *float64
 	gasTipCapMultiplier *float64
+
+	logLookbackBlocks  *uint64
+	gasLimitMultiplier *float64
+}
+
+func (c *EVMBridgeClient) SetLogLookbackBlocks(blocks *uint64) {
+	c.logLookbackBlocks = blocks
+}
+
+func (c *EVMBridgeClient) SetGasLimitMultiplier(multiplier *float64) {
+	c.gasLimitMultiplier = multiplier
+}
+
+func AdjustGasLimit(estimate uint64, multiplier *float64) uint64 {
+	if multiplier == nil || *multiplier <= 1 {
+		return estimate
+	}
+
+	return uint64(math.Ceil(float64(estimate) * *multiplier))
+}
+
+func (c *EVMBridgeClient) logQueryStart(ctx context.Context) (*big.Int, error) {
+	if c.logLookbackBlocks == nil {
+		return nil, nil
+	}
+
+	head, err := c.client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("reading the latest header to bound the log query: %w", err)
+	}
+
+	latest := head.Number.Uint64()
+	if latest <= *c.logLookbackBlocks {
+		return big.NewInt(0), nil
+	}
+
+	return new(big.Int).SetUint64(latest - *c.logLookbackBlocks), nil
 }
 
 func NewEVMBridgeClient(
@@ -186,7 +224,13 @@ func (c *EVMBridgeClient) FindRecvTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}
@@ -247,7 +291,13 @@ func (c *EVMBridgeClient) FindAckTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}
@@ -308,7 +358,13 @@ func (c *EVMBridgeClient) FindTimeoutTx(
 		return nil, fmt.Errorf("creating topics for filter logs query: %w", err)
 	}
 
+	fromBlock, err := c.logQueryStart(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := ethereum.FilterQuery{
+		FromBlock: fromBlock,
 		Addresses: []common.Address{c.routerAddress},
 		Topics:    topics,
 	}
@@ -463,11 +519,18 @@ func (c *EVMBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainID s
 		if err != nil {
 			return nil, fmt.Errorf("parsing send packet event from tx %s logs on chain %s: %w", txHash, c.chainID, err)
 		}
+		var transfer *TransferPayload
+		if len(sendPacket.Packet.Payloads) > 0 {
+			payload := sendPacket.Packet.Payloads[0]
+			transfer = DecodeTransferPayload(payload.SourcePort, payload.Encoding, payload.Value)
+		}
+
 		packets = append(packets, &PacketInfo{
 			Sequence:          sendPacket.Packet.Sequence,
 			SourceClient:      sendPacket.Packet.SourceClient,
 			DestinationClient: sendPacket.Packet.DestClient,
 			TimeoutTimestamp:  time.Unix(int64(sendPacket.Packet.TimeoutTimestamp), 0), //nolint:gosec // G115 bounded conversion
+			Transfer:          transfer,
 		})
 	}
 	if len(packets) == 0 {
@@ -693,8 +756,76 @@ func selectNonceWithFallback(ctx context.Context, chainID string, pendingNonce, 
 	return pendingNonce
 }
 
+var allowedRouterSelectors = map[string]struct{}{
+	"recvPacket":    {},
+	"ackPacket":     {},
+	"timeoutPacket": {},
+	"updateClient":  {},
+}
+
+func (c *EVMBridgeClient) checkRouterCalldata(to common.Address, data []byte) error {
+	if to != c.routerAddress {
+		return fmt.Errorf("refusing to sign a call to %s, not the ICS-26 router %s", to, c.routerAddress)
+	}
+
+	routerABI, err := ics26_router.ContractMetaData.GetAbi()
+	if err != nil {
+		return fmt.Errorf("getting ics26 router abi: %w", err)
+	}
+
+	return checkRouterSelectors(routerABI, data, true)
+}
+
+func checkRouterSelectors(routerABI *abi.ABI, data []byte, allowMulticall bool) error {
+	if len(data) < 4 {
+		return fmt.Errorf("refusing to sign calldata shorter than a 4-byte selector")
+	}
+
+	method, err := routerABI.MethodById(data[:4])
+	if err != nil {
+		return fmt.Errorf("refusing to sign calldata with an unrecognized selector %x", data[:4])
+	}
+
+	if _, ok := allowedRouterSelectors[method.Name]; ok {
+		return nil
+	}
+
+	if method.Name != "multicall" {
+		return fmt.Errorf("refusing to sign router call %q: not an allow-listed selector", method.Name)
+	}
+
+	if !allowMulticall {
+		return fmt.Errorf("refusing to sign a multicall nested inside a multicall")
+	}
+
+	args, err := method.Inputs.Unpack(data[4:])
+	if err != nil {
+		return fmt.Errorf("decoding multicall arguments: %w", err)
+	}
+	if len(args) != 1 {
+		return fmt.Errorf("multicall takes one argument, got %d", len(args))
+	}
+
+	inner, ok := args[0].([][]byte)
+	if !ok {
+		return fmt.Errorf("multicall argument is not a byte array")
+	}
+
+	for i, call := range inner {
+		if err := checkRouterSelectors(routerABI, call, false); err != nil {
+			return fmt.Errorf("multicall inner call %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
 func (c *EVMBridgeClient) newTx(ctx context.Context, bz []byte, address string) (*types.Transaction, error) {
 	to := common.HexToAddress(address)
+
+	if err := c.checkRouterCalldata(to, bz); err != nil {
+		return nil, err
+	}
 
 	head, err := c.client.HeaderByNumber(ctx, nil)
 	if err != nil {
@@ -736,7 +867,7 @@ func (c *EVMBridgeClient) newTx(ctx context.Context, bz []byte, address string) 
 		Nonce:     nonce,
 		GasFeeCap: c.adjustGasFeeCap(gasFeeCap),
 		GasTipCap: c.adjustGasTipCap(gasTipCap),
-		Gas:       gasLimit,
+		Gas:       AdjustGasLimit(gasLimit, c.gasLimitMultiplier),
 		Data:      bz,
 	}
 	return types.NewTx(inner), nil

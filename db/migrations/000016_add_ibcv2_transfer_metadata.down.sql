@@ -1,0 +1,14 @@
+ALTER TABLE ibcv2_transfers DROP COLUMN fee_destination_denom;
+ALTER TABLE ibcv2_transfers DROP COLUMN fee_destination;
+ALTER TABLE ibcv2_transfers DROP COLUMN fee_origin_denom;
+ALTER TABLE ibcv2_transfers DROP COLUMN fee_origin;
+ALTER TABLE ibcv2_transfers DROP COLUMN token_destination_decimals;
+ALTER TABLE ibcv2_transfers DROP COLUMN token_destination;
+ALTER TABLE ibcv2_transfers DROP COLUMN token_origin_decimals;
+ALTER TABLE ibcv2_transfers DROP COLUMN token_origin;
+ALTER TABLE ibcv2_transfers DROP COLUMN denom;
+ALTER TABLE ibcv2_transfers DROP COLUMN transfer_amount;
+ALTER TABLE ibcv2_transfers DROP COLUMN fast_fill;
+ALTER TABLE ibcv2_transfers DROP COLUMN receiver;
+ALTER TABLE ibcv2_transfers DROP COLUMN sender;
+ALTER TABLE ibcv2_transfers DROP COLUMN application;

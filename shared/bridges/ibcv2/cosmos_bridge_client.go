@@ -538,11 +538,45 @@ func (c *CosmosBridgeClient) SendPacketsFromTx(ctx context.Context, sourceChainI
 		return nil, fmt.Errorf("got nil header at height %d", txResult.Height)
 	}
 
+	payloadsByClient := c.sendPacketPayloads(txResult.Tx)
+	seenByClient := make(map[string]int)
+
 	for _, packet := range packets {
 		packet.Timestamp = header.Header.Time
+
+		list := payloadsByClient[packet.SourceClient]
+		index := seenByClient[packet.SourceClient]
+		if index < len(list) {
+			packet.Transfer = list[index]
+			seenByClient[packet.SourceClient]++
+		}
 	}
 
 	return packets, nil
+}
+
+func (c *CosmosBridgeClient) sendPacketPayloads(txBytes []byte) map[string][]*TransferPayload {
+	result := make(map[string][]*TransferPayload)
+
+	decoded, err := c.txConfig.TxDecoder()(txBytes)
+	if err != nil {
+		return result
+	}
+
+	for _, msg := range decoded.GetMsgs() {
+		send, ok := msg.(*ibcchannelv2types.MsgSendPacket)
+		if !ok || len(send.Payloads) == 0 {
+			continue
+		}
+
+		payload := send.Payloads[0]
+		result[send.SourceClient] = append(
+			result[send.SourceClient],
+			DecodeTransferPayload(payload.SourcePort, payload.Encoding, payload.Value),
+		)
+	}
+
+	return result
 }
 
 func (c *CosmosBridgeClient) ShouldRetryTx(ctx context.Context, txHash string, expiry time.Duration, sentTs time.Time) (bool, error) {
@@ -685,6 +719,14 @@ func (c *CosmosBridgeClient) signAndSubmit(ctx context.Context, bz []byte) (come
 		msgs = append(msgs, sdkMsg)
 	}
 
+	relayerAddress, err := bech32.ConvertAndEncode(c.prefix, c.signer.Address(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("converting and encoding signer address %s with prefix %s to bech32: %w", c.signer.Address(ctx), c.prefix, err)
+	}
+	if err := checkRelayerMessages(relayerAddress, msgs...); err != nil {
+		return nil, err
+	}
+
 	if numClientUpdates > 1 {
 		// if the number of update client messages is > 1, then this tx is going to
 		// be too large to submit (http limitation, code 413). to avoid this,
@@ -724,10 +766,49 @@ func (c *CosmosBridgeClient) signAndSubmit(ctx context.Context, bz []byte) (come
 	return c.signAndSubmitMessages(ctx, msgs...)
 }
 
+func relayerMessageSigner(msg sdk.Msg) (string, error) {
+	switch m := msg.(type) {
+	case *ibcclientv1types.MsgUpdateClient:
+		return m.Signer, nil
+	case *ibcchannelv2types.MsgRecvPacket:
+		return m.Signer, nil
+	case *ibcchannelv2types.MsgAcknowledgement:
+		return m.Signer, nil
+	case *ibcchannelv2types.MsgTimeout:
+		return m.Signer, nil
+	default:
+		return "", fmt.Errorf(
+			"refusing to sign message type %s: not an allow-listed relayer message",
+			codectypes.MsgTypeURL(msg),
+		)
+	}
+}
+
+func checkRelayerMessages(relayer string, msgs ...sdk.Msg) error {
+	for _, msg := range msgs {
+		signer, err := relayerMessageSigner(msg)
+		if err != nil {
+			return err
+		}
+		if signer != relayer {
+			return fmt.Errorf(
+				"refusing to sign a %s whose signer %s is not the relayer %s",
+				codectypes.MsgTypeURL(msg), signer, relayer,
+			)
+		}
+	}
+
+	return nil
+}
+
 func (c *CosmosBridgeClient) signAndSubmitMessages(ctx context.Context, msgs ...sdk.Msg) (cometbytes.HexBytes, error) {
 	bech32Address, err := bech32.ConvertAndEncode(c.prefix, c.signer.Address(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("converting and encoding signer address %s with prefix %s to bech32: %w", c.signer.Address(ctx), c.prefix, err)
+	}
+
+	if err := checkRelayerMessages(bech32Address, msgs...); err != nil {
+		return nil, err
 	}
 
 	accountClient := authtypes.NewQueryClient(c.conn)
