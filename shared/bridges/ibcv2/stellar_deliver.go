@@ -17,12 +17,20 @@ import (
 
 const stellarBaseFee = txnbuild.MinBaseFee
 
+const maxHostFunctions = 16
+
 func decodeHostFunctions(raw []byte) ([]xdr.HostFunction, error) {
 	if len(raw) < 4 {
 		return nil, fmt.Errorf("host function array is %d bytes, too short for a count", len(raw))
 	}
 
 	count := binary.BigEndian.Uint32(raw[:4])
+	if count > maxHostFunctions {
+		return nil, fmt.Errorf(
+			"host function array claims %d entries, more than the %d allowed", count, maxHostFunctions,
+		)
+	}
+
 	reader := bytes.NewReader(raw[4:])
 
 	functions := make([]xdr.HostFunction, 0, count)
@@ -49,6 +57,44 @@ const (
 	inclusionTimeout = 60 * time.Second
 )
 
+var allowedRouterFunctions = map[xdr.ScSymbol]struct{}{
+	"update_client":      {},
+	"recv_packet":        {},
+	"acknowledge_packet": {},
+	"timeout_packet":     {},
+}
+
+func checkRouterInvocation(function xdr.HostFunction, router xdr.ContractId, routerID string) error {
+	if function.Type != xdr.HostFunctionTypeHostFunctionTypeInvokeContract {
+		return fmt.Errorf(
+			"refusing to sign a %s host function: only router contract invocations are allowed",
+			function.Type,
+		)
+	}
+
+	invoke := function.InvokeContract
+	if invoke == nil {
+		return fmt.Errorf("refusing to sign a contract invocation with no arguments")
+	}
+
+	address := invoke.ContractAddress
+	if address.Type != xdr.ScAddressTypeScAddressTypeContract ||
+		address.ContractId == nil ||
+		*address.ContractId != router {
+		return fmt.Errorf(
+			"refusing to sign a call to a contract other than the configured router %s", routerID,
+		)
+	}
+
+	if _, ok := allowedRouterFunctions[invoke.FunctionName]; !ok {
+		return fmt.Errorf(
+			"refusing to sign router call %q: not an allow-listed function", invoke.FunctionName,
+		)
+	}
+
+	return nil
+}
+
 func (c *StellarBridgeClient) DeliverTx(ctx context.Context, raw []byte, _ string) (*BridgeTx, error) {
 	if c.signer == nil {
 		return nil, fmt.Errorf("stellar chain %s has no signer configured", c.chainID)
@@ -60,6 +106,16 @@ func (c *StellarBridgeClient) DeliverTx(ctx context.Context, raw []byte, _ strin
 	}
 	if len(functions) == 0 {
 		return nil, fmt.Errorf("nothing to submit: the host function array is empty")
+	}
+
+	router, err := c.routerContract()
+	if err != nil {
+		return nil, err
+	}
+	for i, function := range functions {
+		if err := checkRouterInvocation(function, router, c.cfg.RouterContractID); err != nil {
+			return nil, fmt.Errorf("host function %d of %d: %w", i+1, len(functions), err)
+		}
 	}
 
 	c.submissionLock.Lock()
