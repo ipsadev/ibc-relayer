@@ -719,6 +719,14 @@ func (c *CosmosBridgeClient) signAndSubmit(ctx context.Context, bz []byte) (come
 		msgs = append(msgs, sdkMsg)
 	}
 
+	relayerAddress, err := bech32.ConvertAndEncode(c.prefix, c.signer.Address(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("converting and encoding signer address %s with prefix %s to bech32: %w", c.signer.Address(ctx), c.prefix, err)
+	}
+	if err := checkRelayerMessages(relayerAddress, msgs...); err != nil {
+		return nil, err
+	}
+
 	if numClientUpdates > 1 {
 		// if the number of update client messages is > 1, then this tx is going to
 		// be too large to submit (http limitation, code 413). to avoid this,

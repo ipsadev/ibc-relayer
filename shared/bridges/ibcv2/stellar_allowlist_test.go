@@ -2,6 +2,7 @@ package ibcv2
 
 import (
 	"context"
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -36,12 +37,30 @@ func TestCheckRouterInvocationAllowsTheRouterEntryPoints(t *testing.T) {
 	router := testRouter(t)
 
 	for _, function := range []string{
-		"update_client", "recv_packet", "acknowledge_packet",
-		"timeout_packet", "create_client", "register_counterparty",
+		"update_client", "recv_packet", "acknowledge_packet", "timeout_packet",
 	} {
 		if err := checkRouterInvocation(routerInvocation(router, function), router, "CROUTER"); err != nil {
 			t.Fatalf("%q to the router must be allowed, got %v", function, err)
 		}
+	}
+}
+
+func TestCheckRouterInvocationRejectsClientLifecycleCalls(t *testing.T) {
+	router := testRouter(t)
+
+	for _, function := range []string{"create_client", "register_counterparty"} {
+		if err := checkRouterInvocation(routerInvocation(router, function), router, "CROUTER"); err == nil {
+			t.Fatalf("%q must be refused: the relayer never builds it", function)
+		}
+	}
+}
+
+func TestDecodeHostFunctionsRejectsAHugeCount(t *testing.T) {
+	raw := make([]byte, 4)
+	binary.BigEndian.PutUint32(raw, 1<<20)
+
+	if _, err := decodeHostFunctions(raw); err == nil {
+		t.Fatal("a host function count far above the cap must be refused before allocating")
 	}
 }
 

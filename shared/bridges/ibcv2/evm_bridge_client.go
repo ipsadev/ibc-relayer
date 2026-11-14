@@ -756,8 +756,76 @@ func selectNonceWithFallback(ctx context.Context, chainID string, pendingNonce, 
 	return pendingNonce
 }
 
+var allowedRouterSelectors = map[string]struct{}{
+	"recvPacket":    {},
+	"ackPacket":     {},
+	"timeoutPacket": {},
+	"updateClient":  {},
+}
+
+func (c *EVMBridgeClient) checkRouterCalldata(to common.Address, data []byte) error {
+	if to != c.routerAddress {
+		return fmt.Errorf("refusing to sign a call to %s, not the ICS-26 router %s", to, c.routerAddress)
+	}
+
+	routerABI, err := ics26_router.ContractMetaData.GetAbi()
+	if err != nil {
+		return fmt.Errorf("getting ics26 router abi: %w", err)
+	}
+
+	return checkRouterSelectors(routerABI, data, true)
+}
+
+func checkRouterSelectors(routerABI *abi.ABI, data []byte, allowMulticall bool) error {
+	if len(data) < 4 {
+		return fmt.Errorf("refusing to sign calldata shorter than a 4-byte selector")
+	}
+
+	method, err := routerABI.MethodById(data[:4])
+	if err != nil {
+		return fmt.Errorf("refusing to sign calldata with an unrecognized selector %x", data[:4])
+	}
+
+	if _, ok := allowedRouterSelectors[method.Name]; ok {
+		return nil
+	}
+
+	if method.Name != "multicall" {
+		return fmt.Errorf("refusing to sign router call %q: not an allow-listed selector", method.Name)
+	}
+
+	if !allowMulticall {
+		return fmt.Errorf("refusing to sign a multicall nested inside a multicall")
+	}
+
+	args, err := method.Inputs.Unpack(data[4:])
+	if err != nil {
+		return fmt.Errorf("decoding multicall arguments: %w", err)
+	}
+	if len(args) != 1 {
+		return fmt.Errorf("multicall takes one argument, got %d", len(args))
+	}
+
+	inner, ok := args[0].([][]byte)
+	if !ok {
+		return fmt.Errorf("multicall argument is not a byte array")
+	}
+
+	for i, call := range inner {
+		if err := checkRouterSelectors(routerABI, call, false); err != nil {
+			return fmt.Errorf("multicall inner call %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
 func (c *EVMBridgeClient) newTx(ctx context.Context, bz []byte, address string) (*types.Transaction, error) {
 	to := common.HexToAddress(address)
+
+	if err := c.checkRouterCalldata(to, bz); err != nil {
+		return nil, err
+	}
 
 	head, err := c.client.HeaderByNumber(ctx, nil)
 	if err != nil {

@@ -17,12 +17,20 @@ import (
 
 const stellarBaseFee = txnbuild.MinBaseFee
 
+const maxHostFunctions = 16
+
 func decodeHostFunctions(raw []byte) ([]xdr.HostFunction, error) {
 	if len(raw) < 4 {
 		return nil, fmt.Errorf("host function array is %d bytes, too short for a count", len(raw))
 	}
 
 	count := binary.BigEndian.Uint32(raw[:4])
+	if count > maxHostFunctions {
+		return nil, fmt.Errorf(
+			"host function array claims %d entries, more than the %d allowed", count, maxHostFunctions,
+		)
+	}
+
 	reader := bytes.NewReader(raw[4:])
 
 	functions := make([]xdr.HostFunction, 0, count)
@@ -50,12 +58,10 @@ const (
 )
 
 var allowedRouterFunctions = map[xdr.ScSymbol]struct{}{
-	"update_client":         {},
-	"recv_packet":           {},
-	"acknowledge_packet":    {},
-	"timeout_packet":        {},
-	"create_client":         {},
-	"register_counterparty": {},
+	"update_client":      {},
+	"recv_packet":        {},
+	"acknowledge_packet": {},
+	"timeout_packet":     {},
 }
 
 func checkRouterInvocation(function xdr.HostFunction, router xdr.ContractId, routerID string) error {
